@@ -100,6 +100,8 @@ class BoardContext:
                     self.settings.embedder,
                     self.settings.embed_model,
                     self.settings.embed_dims,
+                    url=self.settings.embed_url,
+                    token=self.settings.embed_token,
                 ),
             )
             return self._retrieval

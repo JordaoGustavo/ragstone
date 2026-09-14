@@ -60,9 +60,13 @@ class Settings(BaseSettings):
     poll_seconds: int = 1200
     mcp_pause_seconds: float = 0.5
     backfill_days: int = 365
-    embedder: Literal["fastembed", "hash"] = "fastembed"
+    embedder: Literal["fastembed", "hash", "http"] = "fastembed"
     embed_model: str = "BAAI/bge-small-en-v1.5"
     embed_dims: int = 384
+    embed_host: str = "127.0.0.1"
+    embed_port: int = 8770
+    embed_url: str = ""
+    embed_token: str = ""
     data_dir: Path = Path("data")
     foundation_mcps: list[FoundationMcp] = Field(default_factory=list)
     jira: JiraSource = Field(default_factory=JiraSource)

@@ -79,7 +79,13 @@ async def with_worker(
         ]
         worker = IngestWorker(
             store,
-            build_embedder(settings.embedder, settings.embed_model, settings.embed_dims),
+            build_embedder(
+                settings.embedder,
+                settings.embed_model,
+                settings.embed_dims,
+                url=settings.embed_url,
+                token=settings.embed_token,
+            ),
             checkpoints,
             connectors,
             poll_seconds=settings.poll_seconds,

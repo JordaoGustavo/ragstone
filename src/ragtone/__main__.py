@@ -8,6 +8,7 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 
 from ragtone.board_http import run_board
+from ragtone.embed_http import run_embed_server
 from ragtone.embeddings import build_embedder
 from ragtone.ingest.client import FoundationClient
 from ragtone.ingest.run import IngestConfigError, open_index, with_worker
@@ -25,7 +26,13 @@ def _index(settings: Settings):
 
 
 def _embedder(settings: Settings):
-    return build_embedder(settings.embedder, settings.embed_model, settings.embed_dims)
+    return build_embedder(
+        settings.embedder,
+        settings.embed_model,
+        settings.embed_dims,
+        url=settings.embed_url,
+        token=settings.embed_token,
+    )
 
 
 def _run_worker(settings: Settings, fn) -> None:
@@ -62,6 +69,20 @@ def cmd_serve(settings: Settings) -> None:
 
 def cmd_board(settings: Settings) -> None:
     run_board(settings)
+
+
+def cmd_embed(settings: Settings, *, host: str | None, port: int | None) -> None:
+    bind_host = host or settings.embed_host
+    bind_port = settings.embed_port if port is None else port
+    kind = settings.embedder if settings.embedder != "http" else "fastembed"
+    embedder = build_embedder(kind, settings.embed_model, settings.embed_dims)
+    run_embed_server(
+        embedder,
+        bind_host,
+        bind_port,
+        token=settings.embed_token,
+        model=settings.embed_model,
+    )
 
 
 def cmd_ingest(settings: Settings, *, backfill: bool) -> None:
@@ -129,6 +150,9 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("sync", help="Poll Foundation MCPs in a loop")
     sub.add_parser("tools", help="List tools on configured Foundation MCPs")
     sub.add_parser("board", help="Open the thread canvas on 127.0.0.1")
+    embed = sub.add_parser("embed", help="Run only the embedding HTTP server")
+    embed.add_argument("--host", default=None, help="Bind address (LAN needs embed_token)")
+    embed.add_argument("--port", type=int, default=None)
     up = sub.add_parser("up", help="Start Elasticsearch, MCP2, board, and sync")
     up.add_argument("--backfill", action="store_true", help="Ingest from scratch before the loop")
     up.add_argument("--no-sync", action="store_true", help="Do not start the poll loop")
@@ -151,6 +175,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_tools(settings)
     elif command == "board":
         cmd_board(settings)
+    elif command == "embed":
+        cmd_embed(settings, host=getattr(args, "host", None), port=getattr(args, "port", None))
     elif command == "up":
         cmd_up(
             settings,
