@@ -12,14 +12,6 @@ from starlette.routing import Route
 from ragtone.embeddings import Embedder
 
 log = logging.getLogger(__name__)
-LOCALHOST = {"127.0.0.1", "localhost", "::1"}
-
-
-def require_embed_bind(host: str, token: str) -> None:
-    if host in LOCALHOST:
-        return
-    if not token:
-        raise ValueError("embed server on the LAN needs embed_token")
 
 
 def _authorized(header: str, token: str) -> bool:
@@ -63,7 +55,6 @@ def run_embed_server(
     token: str = "",
     model: str = "",
 ) -> None:
-    require_embed_bind(host, token)
     import uvicorn
 
     log.info("embed listening on http://%s:%s/embed", host, port)

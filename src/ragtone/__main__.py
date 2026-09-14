@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("tools", help="List tools on configured Foundation MCPs")
     sub.add_parser("board", help="Open the thread canvas on 127.0.0.1")
     embed = sub.add_parser("embed", help="Run only the embedding HTTP server")
-    embed.add_argument("--host", default=None, help="Bind address (LAN needs embed_token)")
+    embed.add_argument("--host", default=None, help="Bind address (0.0.0.0 for LAN)")
     embed.add_argument("--port", type=int, default=None)
     up = sub.add_parser("up", help="Start Elasticsearch, MCP2, board, and sync")
     up.add_argument("--backfill", action="store_true", help="Ingest from scratch before the loop")
