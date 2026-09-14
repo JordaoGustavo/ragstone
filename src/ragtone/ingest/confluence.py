@@ -9,6 +9,21 @@ from ragtone.ingest.parse import as_records, as_text, iso_days_ago, later_waterm
 from ragtone.settings import ConfluenceSource, Settings
 
 
+def scoped_cql(docs: list[str], template: str, stamp: str) -> str:
+    timed = template.format(checkpoint=stamp)
+    spaces = [item for item in docs if not item.isdigit()]
+    pages = [item for item in docs if item.isdigit()]
+    clauses: list[str] = []
+    if spaces:
+        clauses.append(f"space in ({', '.join(spaces)})")
+    if pages:
+        joined = ", ".join(pages)
+        clauses.append(f"(id in ({joined}) OR ancestor in ({joined}))")
+    if not clauses:
+        return timed
+    return f"({' OR '.join(clauses)}) AND ({timed})"
+
+
 class ConfluenceConnector:
     name = "confluence"
 
@@ -26,8 +41,10 @@ class ConfluenceConnector:
         self.pause = pause
 
     async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+        if not self.source.docs:
+            return FetchResult()
         stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
-        cql = self.source.cql.format(checkpoint=stamp)
+        cql = scoped_cql(self.source.docs, self.source.cql, stamp)
         payload = await self.caller.call_tool(
             self.source.search_tool,
             {"cql": cql, "limit": 25},

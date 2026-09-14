@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from ragtone.settings import Settings
+from ragtone.watches import parse_targets, yaml_watches
+
+WATCH_KIND = {
+    "jira": "projects",
+    "confluence": "docs",
+    "chat": "channels",
+}
 
 
 def idle_job() -> dict[str, Any]:
@@ -30,27 +37,43 @@ def connector_rows(
     settings: Settings,
     stats: dict[str, Any],
     checkpoints: dict[str, str],
+    watches: dict[str, list] | None = None,
 ) -> list[dict[str, Any]]:
     specs = {
         "jira": settings.jira,
         "confluence": settings.confluence,
         "chat": settings.chat,
     }
+    watching = watches or yaml_watches(settings)
     by_source = stats.get("by_source") or {}
     rows: list[dict[str, Any]] = []
     for name, spec in specs.items():
         configured = mcp_is_configured(settings, spec.mcp)
+        targets = parse_targets(name, watching.get(name) or [])
+        ids = [item["id"] for item in targets]
+        checkpoint = checkpoints.get(name)
+        if name == "chat":
+            stamps = [
+                value
+                for key, value in checkpoints.items()
+                if key == "chat" or str(key).startswith("chat:")
+            ]
+            if stamps:
+                checkpoint = max(stamps)
         row: dict[str, Any] = {
             "name": name,
             "enabled": spec.enabled,
             "mcp": spec.mcp,
             "mcp_configured": configured,
-            "checkpoint": checkpoints.get(name),
+            "checkpoint": checkpoint,
             "chunks": int(by_source.get(name, 0)),
-            "can_sync": bool(spec.enabled and configured),
+            "watching": ids,
+            "targets": targets,
+            "watch_kind": WATCH_KIND[name],
+            "can_sync": bool(spec.enabled and configured and ids),
         }
         if name == "chat":
-            row["channels"] = list(settings.chat.channels)
+            row["channels"] = ids
         rows.append(row)
     return rows
 
@@ -63,6 +86,11 @@ def collect_gaps(
     gaps: list[dict[str, str | None]] = []
     if not stats.get("ok"):
         gaps.append({"code": "es_down", "connector": None})
+    empty_codes = {
+        "jira": "jira_no_boards",
+        "confluence": "confluence_no_docs",
+        "chat": "chat_no_channels",
+    }
     for row in connectors:
         name = str(row["name"])
         if not row["enabled"]:
@@ -70,8 +98,8 @@ def collect_gaps(
             continue
         if not row["mcp_configured"]:
             gaps.append({"code": "mcp_missing", "connector": name})
-        if name == "chat" and not settings.chat.channels:
-            gaps.append({"code": "chat_no_channels", "connector": "chat"})
+        if not row.get("watching"):
+            gaps.append({"code": empty_codes[name], "connector": name})
         if not row.get("checkpoint"):
             gaps.append({"code": "never_ran", "connector": name})
         if stats.get("ok") and int(row.get("chunks") or 0) == 0:
@@ -86,8 +114,10 @@ def snapshot(
     checkpoints: dict[str, str],
     recent: list[dict[str, Any]],
     job: dict[str, Any],
+    watches: dict[str, list] | None = None,
 ) -> dict[str, Any]:
-    connectors = connector_rows(settings, stats, checkpoints)
+    connectors = connector_rows(settings, stats, checkpoints, watches)
+    watching = watches or yaml_watches(settings)
     return {
         "index": {
             "ok": bool(stats.get("ok")),
@@ -96,6 +126,10 @@ def snapshot(
         },
         "gaps": collect_gaps(settings, stats, connectors),
         "connectors": connectors,
+        "watches": {
+            name: [item["id"] for item in parse_targets(name, watching.get(name) or [])]
+            for name in WATCH_KIND
+        },
         "recent": recent,
         "job": job,
     }

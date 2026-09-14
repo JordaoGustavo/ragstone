@@ -17,12 +17,19 @@ from ragtone.settings import Settings
 log = logging.getLogger(__name__)
 
 
-def build_connectors(settings: Settings, callers: dict[str, ToolCaller]) -> list[Connector]:
+def build_connectors(
+    settings: Settings,
+    callers: dict[str, ToolCaller],
+    checkpoints: CheckpointStore | None = None,
+) -> list[Connector]:
     connectors: list[Connector] = []
-    for builder in (build_jira, build_confluence, build_chat):
+    for builder in (build_jira, build_confluence):
         connector = builder(settings, callers)
         if connector is not None:
             connectors.append(connector)
+    chat = build_chat(settings, callers, checkpoints)
+    if chat is not None:
+        connectors.append(chat)
     return connectors
 
 
@@ -76,6 +83,9 @@ class IngestWorker:
                 count,
                 backfill,
             )
+        if result.watermarks:
+            for key, value in result.watermarks.items():
+                self.checkpoints.set(key, value)
         if result.watermark:
             self.checkpoints.set(connector.name, result.watermark)
         return count

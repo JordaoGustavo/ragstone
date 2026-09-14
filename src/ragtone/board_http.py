@@ -19,6 +19,7 @@ from ragtone.index import SearchIndex
 from ragtone.ingest.run import IngestConfigError, with_worker
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
+from ragtone.watches import WatchStore, parse_targets
 
 log = logging.getLogger(__name__)
 WEB = Path(__file__).parent / "web" / "board"
@@ -38,6 +39,7 @@ class BoardContext:
         self._retrieval_failed = False
         self.job = idle_job()
         self._sync_task: asyncio.Task | None = None
+        self.watches = WatchStore(settings.watch_path)
 
     def live_index(self) -> SearchIndex | None:
         try:
@@ -71,6 +73,7 @@ class BoardContext:
             checkpoints=CheckpointStore(self.settings.checkpoint_path).all(),
             recent=recent,
             job=self.job,
+            watches=self.watches.resolved(self.settings),
         )
 
     def retrieval(self) -> RetrievalService | None:
@@ -279,6 +282,13 @@ def _sync_names(ctx: BoardContext, name: str) -> tuple[list[str] | None, JSONRes
             {"error": f"{name} precisa do MCP configurado em foundation_mcps"},
             status_code=400,
         )
+    if not row.get("watching"):
+        labels = {
+            "jira": "sem projetos/boards para olhar",
+            "confluence": "sem espaços ou páginas para olhar",
+            "chat": "sem canais para olhar",
+        }
+        return None, JSONResponse({"error": f"{name} {labels[name]}"}, status_code=400)
     return [name], None
 
 
@@ -350,6 +360,18 @@ async def start_sync(request: Request) -> JSONResponse:
     return JSONResponse(ctx.admin_snapshot())
 
 
+async def save_watches(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    body = await request.json()
+    name = str(body.get("name") or "").strip()
+    try:
+        items = parse_targets(name, body.get("items"))
+        ctx.watches.set(name, items)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse(ctx.admin_snapshot())
+
+
 def create_app(settings: Settings) -> Starlette:
     routes = [
         Route("/", index),
@@ -368,6 +390,7 @@ def create_app(settings: Settings) -> Starlette:
         Route("/api/expand", expand, methods=["GET"]),
         Route("/api/admin", get_admin, methods=["GET"]),
         Route("/api/admin/sync", start_sync, methods=["POST"]),
+        Route("/api/admin/watches", save_watches, methods=["POST"]),
         Mount("/static", StaticFiles(directory=str(WEB)), name="static"),
     ]
     app = Starlette(routes=routes)

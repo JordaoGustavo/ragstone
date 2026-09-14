@@ -40,6 +40,13 @@ def iso_days_ago(days: int) -> str:
     return start.date().isoformat()
 
 
+def unix_days_ago(days: int) -> str:
+    if days <= 0:
+        return "0"
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    return f"{start.timestamp():.6f}"
+
+
 def later_watermark(*values: str | None) -> str | None:
     stamps = [value for value in values if value]
     if not stamps:

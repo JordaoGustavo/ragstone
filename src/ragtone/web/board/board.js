@@ -628,12 +628,12 @@ edgesEl.addEventListener("dblclick", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.target.closest("input, textarea")) return;
   if (event.key === "Escape" && admin && !admin.hidden) {
     closeAdmin();
     event.preventDefault();
     return;
   }
-  if (event.target.closest("input, textarea")) return;
   if (admin && !admin.hidden) return;
   if (event.key !== "Backspace" && event.key !== "Delete") return;
   event.preventDefault();
@@ -658,10 +658,39 @@ const GAP_COPY = {
   es_down: () => "Elasticsearch fora do ar — o índice não recebe nada",
   disabled: (name) => `${name} desligado em ragtone.yaml`,
   mcp_missing: (name) => `${name} precisa do MCP configurado em foundation_mcps`,
-  chat_no_channels: () => "chat sem canais na config",
+  chat_no_channels: () => "chat sem canais para olhar",
+  jira_no_boards: () => "jira sem projetos/boards para olhar",
+  confluence_no_docs: () => "confluence sem espaços ou páginas para olhar",
   never_ran: (name) => `${name} nunca rodou — force uma atualização`,
   zero_chunks: (name) => `${name} não tem chunks no índice`,
 };
+
+const WATCH_UI = {
+  chat: { title: "Canais do Slack", placeholder: "C0123 ou eng" },
+  jira: { title: "Boards / projetos", placeholder: "ABC" },
+  confluence: { title: "Docs / espaços", placeholder: "ENG ou 123456" },
+};
+
+const CHANNEL_RANGES = [
+  { days: 7, label: "7 dias" },
+  { days: 30, label: "30 dias" },
+  { days: 90, label: "90 dias" },
+  { days: 180, label: "6 meses" },
+  { days: 365, label: "1 ano" },
+  { days: 0, label: "tudo" },
+];
+
+function asTargets(row) {
+  const raw = row.targets || row.watching || [];
+  return raw.map((item) => (typeof item === "string" ? { id: item } : item));
+}
+
+function rangeLabel(days) {
+  if (days === 0) return "tudo";
+  if (days == null) return "";
+  const found = CHANNEL_RANGES.find((item) => item.days === days);
+  return found ? found.label : `${days}d`;
+}
 
 function closeAdmin() {
   admin.hidden = true;
@@ -696,10 +725,108 @@ function connectorMeta(row) {
     `${row.chunks} chunks`,
     row.checkpoint ? `checkpoint ${row.checkpoint}` : "nunca rodou",
   ];
-  if (row.name === "chat") {
-    bits.push(row.channels?.length ? `canais ${row.channels.join(", ")}` : "sem canais");
-  }
   return bits.join(" · ");
+}
+
+function watchEditor(row) {
+  const spec = WATCH_UI[row.name] || { title: "Onde olhar", placeholder: "" };
+  const wrap = document.createElement("form");
+  wrap.className = "admin-watch";
+  wrap.dataset.source = row.name;
+  const label = document.createElement("p");
+  label.className = "search-label";
+  label.textContent = spec.title;
+  const chips = document.createElement("ul");
+  chips.className = "watch-chips";
+  const items = asTargets(row);
+  for (const item of items) {
+    const li = document.createElement("li");
+    const range = row.name === "chat" ? rangeLabel(item.backfill_days) : "";
+    li.textContent = range ? `${item.id} · ${range}` : item.id;
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.setAttribute("aria-label", `Remover ${item.id}`);
+    drop.textContent = "×";
+    drop.addEventListener("click", () => {
+      saveWatches(
+        row.name,
+        items.filter((value) => value.id !== item.id),
+      );
+    });
+    li.appendChild(drop);
+    chips.appendChild(li);
+  }
+  if (!items.length) {
+    const empty = document.createElement("li");
+    empty.textContent = "nada selecionado";
+    empty.style.background = "transparent";
+    empty.style.fontWeight = "400";
+    chips.appendChild(empty);
+  }
+  const add = document.createElement("div");
+  add.className = row.name === "chat" ? "watch-add chat" : "watch-add";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = spec.placeholder;
+  input.autocomplete = "off";
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.textContent = "Adicionar";
+  if (row.name === "chat") {
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Quanto tempo para trás");
+    for (const option of CHANNEL_RANGES) {
+      const node = document.createElement("option");
+      node.value = String(option.days);
+      node.textContent = option.label;
+      if (option.days === 90) node.selected = true;
+      select.appendChild(node);
+    }
+    add.append(input, select, submit);
+    wrap.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value = input.value.trim();
+      if (!value) return;
+      saveWatches(row.name, items.concat({
+        id: value,
+        backfill_days: Number(select.value),
+      }));
+    });
+  } else {
+    add.append(input, submit);
+    wrap.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value = input.value.trim();
+      if (!value) return;
+      saveWatches(row.name, items.concat({ id: value }));
+    });
+  }
+  wrap.append(label, chips, add);
+  return wrap;
+}
+
+function renderConnectors(data) {
+  const running = data.job?.status === "running";
+  const ready = (data.connectors || []).filter((row) => row.can_sync);
+  syncAll.disabled = running || !ready.length;
+  adminConnectors.innerHTML = "";
+  for (const row of data.connectors || []) {
+    const card = document.createElement("article");
+    card.className = "admin-connector";
+    const copy = document.createElement("div");
+    const title = document.createElement("h4");
+    title.textContent = row.name;
+    const meta = document.createElement("p");
+    meta.textContent = connectorMeta(row);
+    copy.append(title, meta);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Atualizar";
+    btn.disabled = running || !row.can_sync;
+    btn.addEventListener("click", () => requestSync(row.name));
+    card.append(copy, btn, watchEditor(row));
+    adminConnectors.appendChild(card);
+  }
 }
 
 function renderAdmin(data) {
@@ -720,25 +847,16 @@ function renderAdmin(data) {
     }
   }
   const running = data.job?.status === "running";
-  const ready = (data.connectors || []).filter((row) => row.can_sync);
-  syncAll.disabled = running || !ready.length;
-  adminConnectors.innerHTML = "";
-  for (const row of data.connectors || []) {
-    const card = document.createElement("article");
-    card.className = "admin-connector";
-    const copy = document.createElement("div");
-    const title = document.createElement("h4");
-    title.textContent = row.name;
-    const meta = document.createElement("p");
-    meta.textContent = connectorMeta(row);
-    copy.append(title, meta);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Atualizar";
-    btn.disabled = running || !row.can_sync;
-    btn.addEventListener("click", () => requestSync(row.name));
-    card.append(copy, btn);
-    adminConnectors.appendChild(card);
+  const focused = document.activeElement;
+  const typing = Boolean(
+    focused &&
+      focused.closest(".watch-add") &&
+      (focused.tagName === "INPUT" || focused.tagName === "SELECT"),
+  );
+  if (!typing) {
+    renderConnectors(data);
+  } else {
+    syncAll.disabled = running || !(data.connectors || []).some((row) => row.can_sync);
   }
   renderFeed(adminRecent, data.recent || [], "nada no índice ainda", closeAdmin);
   if (running) {
@@ -763,6 +881,20 @@ async function requestSync(name) {
   const data = await res.json();
   if (!res.ok) {
     adminJob.textContent = data.error || "falhou";
+    return;
+  }
+  renderAdmin(data);
+}
+
+async function saveWatches(name, items) {
+  const res = await fetch("/api/admin/watches", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, items }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    adminJob.textContent = data.error || "não deu para salvar";
     return;
   }
   renderAdmin(data);

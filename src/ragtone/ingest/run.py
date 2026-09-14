@@ -11,6 +11,7 @@ from ragtone.index import SearchIndex
 from ragtone.ingest.client import FoundationClient
 from ragtone.ingest.worker import IngestWorker, build_connectors
 from ragtone.settings import Settings
+from ragtone.watches import WatchStore, overlay_settings
 
 SOURCES = ("jira", "confluence", "chat")
 
@@ -48,6 +49,8 @@ async def with_worker(
     *,
     names: Sequence[str] | None = None,
 ) -> object:
+    watching = WatchStore(settings.watch_path).resolved(settings)
+    settings = overlay_settings(settings, watching)
     selected = _selected_names(settings, names)
     specs = {
         "jira": settings.jira,
@@ -68,15 +71,16 @@ async def with_worker(
             )
         store = open_index(settings)
         store.ensure_index()
+        checkpoints = CheckpointStore(settings.checkpoint_path)
         connectors = [
             connector
-            for connector in build_connectors(settings, callers)
+            for connector in build_connectors(settings, callers, checkpoints)
             if names is None or connector.name in selected
         ]
         worker = IngestWorker(
             store,
             build_embedder(settings.embedder, settings.embed_model, settings.embed_dims),
-            CheckpointStore(settings.checkpoint_path),
+            checkpoints,
             connectors,
             poll_seconds=settings.poll_seconds,
         )

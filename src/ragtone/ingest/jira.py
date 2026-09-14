@@ -8,6 +8,20 @@ from ragtone.ingest.parse import as_records, as_text, iso_days_ago, later_waterm
 from ragtone.settings import JiraSource, Settings
 
 
+def scoped_jql(projects: list[str], template: str, stamp: str) -> str:
+    timed = template.format(checkpoint=stamp)
+    order = ""
+    marker = " ORDER BY "
+    idx = timed.upper().rfind(marker)
+    if idx >= 0:
+        order = timed[idx:]
+        timed = timed[:idx]
+    if projects:
+        joined = ", ".join(projects)
+        timed = f"project in ({joined}) AND ({timed})"
+    return timed + order
+
+
 class JiraConnector:
     name = "jira"
 
@@ -25,8 +39,10 @@ class JiraConnector:
         self.pause = pause
 
     async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+        if not self.source.projects:
+            return FetchResult()
         stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
-        jql = self.source.jql.format(checkpoint=stamp)
+        jql = scoped_jql(self.source.projects, self.source.jql, stamp)
         payload = await self.caller.call_tool(
             self.source.search_tool,
             {"jql": jql, "limit": 50},

@@ -23,6 +23,7 @@ class JiraSource(BaseModel):
     search_tool: str = "jira_search"
     get_tool: str = "jira_get_issue"
     jql: str = 'updated >= "{checkpoint}" ORDER BY updated ASC'
+    projects: list[str] = Field(default_factory=list)
 
 
 class ConfluenceSource(BaseModel):
@@ -31,6 +32,7 @@ class ConfluenceSource(BaseModel):
     search_tool: str = "confluence_search"
     get_tool: str = "confluence_get_page"
     cql: str = 'lastModified >= "{checkpoint}"'
+    docs: list[str] = Field(default_factory=list)
 
 
 class ChatSource(BaseModel):
@@ -39,6 +41,7 @@ class ChatSource(BaseModel):
     history_tool: str = "conversations_history"
     replies_tool: str = "conversations_replies"
     channels: list[str] = Field(default_factory=list)
+    channel_windows: dict[str, int] = Field(default_factory=dict)
 
 
 class Settings(BaseSettings):
@@ -73,6 +76,10 @@ class Settings(BaseSettings):
     @property
     def board_path(self) -> Path:
         return self.data_dir / "board.json"
+
+    @property
+    def watch_path(self) -> Path:
+        return self.data_dir / "watches.json"
 
     def mcp_by_name(self, name: str) -> FoundationMcp:
         for item in self.foundation_mcps:

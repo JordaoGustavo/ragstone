@@ -25,6 +25,8 @@ jira:
   search_tool: jira_search
   get_tool: jira_get_issue
   jql: 'updated >= "{checkpoint}" ORDER BY updated ASC'
+  # Or pick project keys in the Trilha Admin. Example: [ABC, PLAT]
+  projects: []
 
 confluence:
   enabled: false
@@ -32,6 +34,8 @@ confluence:
   search_tool: confluence_search
   get_tool: confluence_get_page
   cql: 'lastModified >= "{checkpoint}"'
+  # Space keys or page ids; Admin can set these too.
+  docs: []
 
 chat:
   enabled: false

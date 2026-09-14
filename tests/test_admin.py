@@ -59,7 +59,7 @@ def test_snapshot_flags_disabled_connectors_when_es_is_down() -> None:
 
 def test_snapshot_flags_enabled_jira_that_never_ran() -> None:
     settings = Settings(
-        jira={"enabled": True, "mcp": "atlassian"},
+        jira={"enabled": True, "mcp": "atlassian", "projects": ["ABC"]},
         foundation_mcps=[
             FoundationMcp(name="atlassian", url="http://127.0.0.1:3001/mcp"),
         ],
@@ -93,6 +93,25 @@ def test_snapshot_flags_chat_without_channels() -> None:
     codes = {gap["code"] for gap in data["gaps"] if gap["connector"] == "chat"}
     assert "chat_no_channels" in codes
     assert "mcp_missing" not in codes
+
+
+def test_snapshot_flags_jira_without_projects() -> None:
+    settings = Settings(
+        jira={"enabled": True, "mcp": "atlassian"},
+        foundation_mcps=[FoundationMcp(name="atlassian", url="http://127.0.0.1:3001/mcp")],
+    )
+    data = snapshot(
+        settings,
+        stats={"ok": True, "total": 0, "by_source": {}},
+        checkpoints={},
+        recent=[],
+        job=idle_job(),
+    )
+    jira = next(row for row in data["connectors"] if row["name"] == "jira")
+    assert jira["can_sync"] is False
+    assert jira["watching"] == []
+    codes = {gap["code"] for gap in data["gaps"] if gap["connector"] == "jira"}
+    assert "jira_no_boards" in codes
 
 
 def test_placeholder_mcp_url_is_not_configured() -> None:
@@ -187,7 +206,7 @@ def test_board_http_sync_conflict_when_job_running(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path,
         embedder="hash",
-        jira={"enabled": True, "mcp": "atlassian"},
+        jira={"enabled": True, "mcp": "atlassian", "projects": ["ABC"]},
         foundation_mcps=[FoundationMcp(name="atlassian", url="http://127.0.0.1:3001/mcp")],
     )
     client = TestClient(create_app(settings))

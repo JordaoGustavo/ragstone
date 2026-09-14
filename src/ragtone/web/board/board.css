@@ -564,7 +564,7 @@ body {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 12px;
-  align-items: center;
+  align-items: start;
   margin-bottom: 8px;
   padding: 12px 14px;
   background: #fffaf3;
@@ -598,6 +598,71 @@ body {
   background: #d9cfc0;
   color: #8a7d6c;
   cursor: not-allowed;
+}
+
+.admin-watch {
+  grid-column: 1 / -1;
+}
+
+.admin-watch .search-label {
+  margin: 4px 0 8px;
+  color: #8a7d6c;
+}
+
+.watch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.watch-chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #efe6d6;
+  color: var(--ink);
+  font: 600 12px "IBM Plex Mono", monospace;
+}
+
+.watch-chips button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  color: #8a7d6c;
+  font: 700 14px "IBM Plex Mono", monospace;
+}
+
+.watch-chips button:hover {
+  color: var(--copper);
+}
+
+.watch-add {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.watch-add.chat {
+  grid-template-columns: 1fr auto auto;
+}
+
+.watch-add input,
+.watch-add select {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid #d9cfc0;
+  padding: 8px 10px;
+  font: 14px "Atkinson Hyperlegible", sans-serif;
+}
+
+.watch-add input:focus,
+.watch-add select:focus {
+  outline: 1px solid var(--copper);
 }
 
 #admin-recent .hit {

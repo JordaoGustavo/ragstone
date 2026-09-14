@@ -10,6 +10,7 @@ from ragtone.models import Chunk
 class FetchResult:
     chunks: list[Chunk] = field(default_factory=list)
     watermark: str | None = None
+    watermarks: dict[str, str] = field(default_factory=dict)
 
 
 class Connector(Protocol):
