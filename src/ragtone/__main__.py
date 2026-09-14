@@ -15,6 +15,7 @@ from ragtone.ingest.worker import IngestWorker
 from ragtone.mcp_server import build_mcp, run_mcp
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings, load_settings
+from ragtone.up import run_up
 
 log = logging.getLogger(__name__)
 
@@ -92,14 +93,34 @@ def cmd_tools(settings: Settings) -> None:
     print(json.dumps(asyncio.run(_list_tools(settings)), indent=2, ensure_ascii=False))
 
 
+def cmd_up(
+    settings: Settings,
+    *,
+    config: Path | None,
+    backfill: bool,
+    sync: bool,
+    open_browser: bool,
+) -> None:
+    run_up(
+        settings,
+        config=config,
+        backfill=backfill,
+        sync=sync,
+        open_browser=open_browser,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    parser = argparse.ArgumentParser(prog="ragtone")
+    parser = argparse.ArgumentParser(
+        prog="ragtone",
+        description="Local retrieval cache. Sem comando, sobe Elasticsearch, MCP2, Trilha e sync.",
+    )
     parser.add_argument("--config", type=Path, default=None)
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
     sub.add_parser("ping", help="Check Elasticsearch")
     sub.add_parser("ensure-index", help="Create the Elasticsearch index if missing")
     sub.add_parser("serve", help="Run MCP2 on 127.0.0.1 for Claude/OpenCode")
@@ -108,25 +129,38 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("sync", help="Poll Foundation MCPs in a loop")
     sub.add_parser("tools", help="List tools on configured Foundation MCPs")
     sub.add_parser("board", help="Open the thread canvas on 127.0.0.1")
+    up = sub.add_parser("up", help="Start Elasticsearch, MCP2, board, and sync")
+    up.add_argument("--backfill", action="store_true", help="Ingest from scratch before the loop")
+    up.add_argument("--no-sync", action="store_true", help="Do not start the poll loop")
+    up.add_argument("--no-open", action="store_true", help="Do not open the browser")
     args = parser.parse_args(argv)
     settings = load_settings(args.config)
+    command = args.command or "up"
 
-    if args.command == "ping":
+    if command == "ping":
         cmd_ping(settings)
-    elif args.command == "ensure-index":
+    elif command == "ensure-index":
         cmd_ensure_index(settings)
-    elif args.command == "serve":
+    elif command == "serve":
         cmd_serve(settings)
-    elif args.command == "ingest":
+    elif command == "ingest":
         cmd_ingest(settings, backfill=args.backfill)
-    elif args.command == "sync":
+    elif command == "sync":
         cmd_sync(settings)
-    elif args.command == "tools":
+    elif command == "tools":
         cmd_tools(settings)
-    elif args.command == "board":
+    elif command == "board":
         cmd_board(settings)
+    elif command == "up":
+        cmd_up(
+            settings,
+            config=args.config,
+            backfill=bool(getattr(args, "backfill", False)),
+            sync=not bool(getattr(args, "no_sync", False)),
+            open_browser=not bool(getattr(args, "no_open", False)),
+        )
     else:
-        parser.error(args.command)
+        parser.error(command)
 
 
 if __name__ == "__main__":
