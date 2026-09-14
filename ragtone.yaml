@@ -14,6 +14,9 @@ embed_host: 127.0.0.1
 embed_port: 8770
 embed_url: ""
 data_dir: data
+# Real gateway URLs, project keys, page ids, channel ids etc are company-specific —
+# keep them out of this tracked file. Put them in ragtone.local.yaml (gitignored)
+# and run with: ragtone --config ragtone.local.yaml <command>
 
 # Fill these with the Foundation MCP servers you already use in Claude/OpenCode.
 foundation_mcps:
