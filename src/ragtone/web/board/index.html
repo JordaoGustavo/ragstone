@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trilha · ragtone</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@500;600&family=Syne:wght@700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/board.css" />
+  </head>
+  <body>
+    <aside class="rail">
+      <p class="mark">Trilha</p>
+      <p class="lede">
+        Busca no índice ou solta uma nota. Recentes embaixo — clique para
+        cair sozinho no canvas. Arrasta o cobre para ligar. Duplo clique na
+        corda corta.
+      </p>
+      <label class="search-label" for="q">Buscar no índice</label>
+      <div class="composer">
+        <input id="q" type="search" placeholder="SSO, ABC-12, runbook…" autocomplete="off" />
+        <button type="button" id="drop">Soltar</button>
+      </div>
+      <p id="search-status" class="status"></p>
+      <div class="feed">
+        <div id="hits" class="hits" hidden></div>
+        <p class="search-label" id="recents-label">Recentes</p>
+        <div id="recents" class="hits"></div>
+      </div>
+      <div class="rail-foot">
+        <button type="button" id="open-admin">Admin</button>
+        <p class="search-label">Caminhos</p>
+        <button type="button" id="new-walk">Nova trilha</button>
+        <ol id="walk-list"></ol>
+      </div>
+    </aside>
+    <main id="stage">
+      <div id="viewport">
+        <div id="world">
+          <div id="paper" aria-hidden="true"></div>
+          <svg id="edges" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div id="nodes"></div>
+        </div>
+      </div>
+      <nav id="strip" aria-label="Caminho percorrido"></nav>
+      <section id="admin" hidden>
+        <header class="admin-head">
+          <div>
+            <p class="search-label">Admin</p>
+            <h2>Índice e conectores</h2>
+            <p class="admin-lede">
+              O que o índice viu, o que ainda falta, e um empurrão nos
+              conectores.
+            </p>
+          </div>
+          <button type="button" id="close-admin" class="ghost">Fechar</button>
+        </header>
+        <p id="admin-job" class="status"></p>
+        <label class="admin-backfill">
+          <input id="admin-backfill" type="checkbox" />
+          Desde o começo (backfill)
+        </label>
+        <section class="admin-block">
+          <h3>Índice</h3>
+          <p id="admin-index"></p>
+        </section>
+        <section class="admin-block">
+          <h3>O que falta</h3>
+          <ul id="admin-gaps"></ul>
+        </section>
+        <section class="admin-block">
+          <div class="admin-block-head">
+            <h3>Conectores</h3>
+            <button type="button" id="sync-all">Atualizar todos</button>
+          </div>
+          <div id="admin-connectors"></div>
+        </section>
+        <section class="admin-block">
+          <h3>Recentes no índice</h3>
+          <div id="admin-recent" class="hits"></div>
+        </section>
+      </section>
+    </main>
+    <aside id="inspector" hidden>
+      <button type="button" id="close-inspector" class="ghost">Fechar</button>
+      <p class="eyebrow" id="insp-source"></p>
+      <h2 id="insp-title"></h2>
+      <p id="insp-excerpt"></p>
+      <a id="insp-url" hidden target="_blank" rel="noreferrer">Abrir origem</a>
+      <div id="insp-body"></div>
+    </aside>
+    <script src="/static/board.js"></script>
+  </body>
+</html>

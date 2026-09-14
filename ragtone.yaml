@@ -1,0 +1,41 @@
+elasticsearch_url: http://127.0.0.1:9200
+elasticsearch_index: ragtone_chunks
+mcp_host: 127.0.0.1
+mcp_port: 8765
+poll_seconds: 1200
+mcp_pause_seconds: 0.5
+backfill_days: 365
+embedder: fastembed
+embed_model: BAAI/bge-small-en-v1.5
+embed_dims: 384
+data_dir: data
+
+# Fill these with the Foundation MCP servers you already use in Claude/OpenCode.
+foundation_mcps:
+  - name: atlassian
+    transport: http
+    url: http://127.0.0.1:9/replace-with-foundation-atlassian-mcp
+    # transport: stdio
+    # command: npx
+    # args: ["-y", "@company/atlassian-mcp"]
+
+jira:
+  enabled: false
+  mcp: atlassian
+  search_tool: jira_search
+  get_tool: jira_get_issue
+  jql: 'updated >= "{checkpoint}" ORDER BY updated ASC'
+
+confluence:
+  enabled: false
+  mcp: atlassian
+  search_tool: confluence_search
+  get_tool: confluence_get_page
+  cql: 'lastModified >= "{checkpoint}"'
+
+chat:
+  enabled: false
+  mcp: chat
+  history_tool: conversations_history
+  replies_tool: conversations_replies
+  channels: []
