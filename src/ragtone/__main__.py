@@ -103,7 +103,7 @@ async def _list_tools(settings: Settings) -> dict[str, list[dict[str, str]]]:
     listed: dict[str, list[dict[str, str]]] = {}
     async with AsyncExitStack() as stack:
         for spec in settings.foundation_mcps:
-            client = await stack.enter_async_context(FoundationClient(spec))
+            client = await stack.enter_async_context(FoundationClient(spec, settings.data_dir))
             listed[spec.name] = await client.list_tools()
     return listed
 

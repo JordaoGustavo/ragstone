@@ -32,11 +32,13 @@ class ConfluenceConnector:
         source: ConfluenceSource,
         caller: ToolCaller,
         *,
+        cloud_id: str,
         backfill_days: int,
         pause: float,
     ) -> None:
         self.source = source
         self.caller = caller
+        self.cloud_id = cloud_id
         self.backfill_days = backfill_days
         self.pause = pause
 
@@ -47,7 +49,7 @@ class ConfluenceConnector:
         cql = scoped_cql(self.source.docs, self.source.cql, stamp)
         payload = await self.caller.call_tool(
             self.source.search_tool,
-            {"cql": cql, "limit": 25},
+            {"cql": cql, "cloudId": self.cloud_id, "limit": 25},
         )
         pages = as_records(payload, "results", "pages", "values")
         chunks = []
@@ -60,7 +62,7 @@ class ConfluenceConnector:
             if self.source.get_tool and not (page.get("body") or page.get("content")):
                 fetched = await self.caller.call_tool(
                     self.source.get_tool,
-                    {"pageId": page_id},
+                    {"pageId": page_id, "cloudId": self.cloud_id},
                 )
                 if isinstance(fetched, dict):
                     detail = fetched
@@ -95,6 +97,7 @@ def build_confluence(
     return ConfluenceConnector(
         settings.confluence,
         callers[settings.confluence.mcp],
+        cloud_id=settings.atlassian_cloud_id,
         backfill_days=settings.backfill_days,
         pause=settings.mcp_pause_seconds,
     )

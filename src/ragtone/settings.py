@@ -15,6 +15,7 @@ class FoundationMcp(BaseModel):
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class JiraSource(BaseModel):
@@ -68,6 +69,7 @@ class Settings(BaseSettings):
     embed_url: str = ""
     embed_token: str = ""
     data_dir: Path = Path("data")
+    atlassian_cloud_id: str = ""
     foundation_mcps: list[FoundationMcp] = Field(default_factory=list)
     jira: JiraSource = Field(default_factory=JiraSource)
     confluence: ConfluenceSource = Field(default_factory=ConfluenceSource)

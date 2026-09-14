@@ -30,11 +30,13 @@ class JiraConnector:
         source: JiraSource,
         caller: ToolCaller,
         *,
+        cloud_id: str,
         backfill_days: int,
         pause: float,
     ) -> None:
         self.source = source
         self.caller = caller
+        self.cloud_id = cloud_id
         self.backfill_days = backfill_days
         self.pause = pause
 
@@ -45,7 +47,7 @@ class JiraConnector:
         jql = scoped_jql(self.source.projects, self.source.jql, stamp)
         payload = await self.caller.call_tool(
             self.source.search_tool,
-            {"jql": jql, "limit": 50},
+            {"jql": jql, "cloudId": self.cloud_id, "maxResults": 50},
         )
         issues = as_records(payload, "issues", "results", "values")
         chunks = []
@@ -58,7 +60,7 @@ class JiraConnector:
             if self.source.get_tool and "fields" not in issue:
                 fetched = await self.caller.call_tool(
                     self.source.get_tool,
-                    {"issueKey": key},
+                    {"issueIdOrKey": key, "cloudId": self.cloud_id},
                 )
                 if isinstance(fetched, dict):
                     detail = fetched
@@ -118,6 +120,7 @@ def build_jira(settings: Settings, callers: dict[str, ToolCaller]) -> JiraConnec
     return JiraConnector(
         settings.jira,
         callers[settings.jira.mcp],
+        cloud_id=settings.atlassian_cloud_id,
         backfill_days=settings.backfill_days,
         pause=settings.mcp_pause_seconds,
     )

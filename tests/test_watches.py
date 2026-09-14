@@ -76,6 +76,7 @@ def test_jira_skips_mcp_when_no_projects() -> None:
     connector = JiraConnector(
         JiraSource(enabled=True, projects=[]),
         _BoomCaller(),
+        cloud_id="https://example.atlassian.net",
         backfill_days=30,
         pause=0,
     )
@@ -87,6 +88,7 @@ def test_confluence_skips_mcp_when_no_docs() -> None:
     connector = ConfluenceConnector(
         ConfluenceSource(enabled=True, docs=[]),
         _BoomCaller(),
+        cloud_id="https://example.atlassian.net",
         backfill_days=30,
         pause=0,
     )

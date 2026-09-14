@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Protocol
 
+import httpx2
 from mcp import Client, StdioServerParameters
+from mcp.client.streamable_http import streamable_http_client
 
+from ragtone.ingest.oauth import build_oauth_provider
 from ragtone.settings import FoundationMcp
 
 
@@ -34,8 +38,9 @@ def parse_mcp_result(result: Any) -> Any:
 
 
 class FoundationClient:
-    def __init__(self, spec: FoundationMcp) -> None:
+    def __init__(self, spec: FoundationMcp, data_dir: Path) -> None:
         self.spec = spec
+        self.data_dir = data_dir
         self._client: Client | None = None
 
     def _connect(self) -> Client:
@@ -52,7 +57,12 @@ class FoundationClient:
         if self.spec.transport == "http":
             if not self.spec.url:
                 raise ValueError(f"{self.spec.name} http MCP needs a url")
-            return Client(self.spec.url)
+            # Auth only kicks in if the gateway answers 401; harmless for MCPs that don't need it.
+            http_client = httpx2.AsyncClient(
+                headers=self.spec.headers,
+                auth=build_oauth_provider(self.spec, self.data_dir),
+            )
+            return Client(streamable_http_client(self.spec.url, http_client=http_client))
         raise ValueError(f"Unsupported transport {self.spec.transport}")
 
     async def __aenter__(self) -> FoundationClient:

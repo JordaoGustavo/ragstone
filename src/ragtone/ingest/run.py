@@ -63,7 +63,9 @@ async def with_worker(
         for spec in settings.foundation_mcps:
             if spec.name not in needed:
                 continue
-            callers[spec.name] = await stack.enter_async_context(FoundationClient(spec))
+            callers[spec.name] = await stack.enter_async_context(
+                FoundationClient(spec, settings.data_dir)
+            )
         missing = needed - set(callers)
         if missing:
             raise IngestConfigError(

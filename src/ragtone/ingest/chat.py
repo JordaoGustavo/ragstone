@@ -46,7 +46,7 @@ class ChatConnector:
             oldest = self._oldest(channel, backfill=backfill)
             history = await self.caller.call_tool(
                 self.source.history_tool,
-                {"channel": channel, "oldest": oldest},
+                {"channel_id": channel, "oldest": oldest},
             )
             messages = as_records(history, "messages", "results")
             thread_ids: set[str] = set()
@@ -72,7 +72,7 @@ class ChatConnector:
             for thread_id in thread_ids:
                 replies = await self.caller.call_tool(
                     self.source.replies_tool,
-                    {"channel": channel, "thread_ts": thread_id},
+                    {"channel_id": channel, "message_ts": thread_id},
                 )
                 for message in as_records(replies, "messages", "replies"):
                     message_id = str(message.get("ts") or message.get("id") or "")
