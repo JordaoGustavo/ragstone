@@ -108,6 +108,29 @@ def test_ingest_worker_upserts_and_saves_watermark(tmp_path: Path) -> None:
     assert checkpoints.get("jira") == "2026-03-01"
 
 
+class _BoomConnector:
+    name = "confluence"
+
+    async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+        raise RuntimeError("upstream 500")
+
+
+def test_ingest_worker_isolates_a_failing_connector(tmp_path: Path) -> None:
+    chunks = jira_chunks(key="ABC-1", summary="Login", description="Timeout on SSO")
+    store = InMemoryIndex()
+    checkpoints = CheckpointStore(tmp_path / "checkpoints.json")
+    worker = IngestWorker(
+        store,
+        HashEmbedder(8),
+        checkpoints,
+        [_BoomConnector(), _ScriptedConnector(chunks, "2026-03-01")],
+        poll_seconds=1,
+    )
+    count = asyncio.run(worker.backfill())
+    assert count == 1
+    assert [hit.native_id for hit in store.by_issue("ABC-1")] == ["ABC-1"]
+
+
 def test_recent_messages_are_newest_thread_first() -> None:
     embedder = HashEmbedder(8)
     store = InMemoryIndex()

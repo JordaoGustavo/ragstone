@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from ragtone.__main__ import main
 from ragtone.settings import Settings
-from ragtone.up import child_argv, ensure_elasticsearch, find_compose_file, run_up
+from ragtone.up import _supervise, child_argv, ensure_elasticsearch, find_compose_file, run_up
 
 
 class _FakeIndex:
@@ -73,6 +73,60 @@ def test_run_up_starts_serve_board_and_sync(monkeypatch, tmp_path: Path) -> None
     assert names == ["serve", "board", "sync"]
     assert fake.ensured is True
     assert opened == ["http://127.0.0.1:8766"]
+
+
+def test_supervise_reports_a_dead_sibling_process_once(monkeypatch) -> None:
+    warnings: list[tuple] = []
+    monkeypatch.setattr("ragtone.up.log.warning", lambda *a: warnings.append(a))
+    monkeypatch.setattr("ragtone.up.subprocess.Popen", lambda argv: SimpleNamespace(poll=lambda: 1))
+
+    ticks = {"count": 0}
+
+    def fake_sleep(seconds: float) -> None:
+        ticks["count"] += 1
+        if ticks["count"] > 1:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("ragtone.up.time.sleep", fake_sleep)
+
+    procs = {
+        "serve": SimpleNamespace(poll=lambda: None),
+        "board": SimpleNamespace(poll=lambda: None),
+        "sync": SimpleNamespace(poll=lambda: 1),
+    }
+    _supervise(procs, config=None)
+    assert warnings[0] == ("%s exited with %s", "sync", 1)
+
+
+def test_supervise_restarts_sync_with_growing_backoff(monkeypatch) -> None:
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("ragtone.up.log.warning", lambda *a: None)
+    monkeypatch.setattr(
+        "ragtone.up.subprocess.Popen",
+        lambda argv: spawned.append(argv) or SimpleNamespace(poll=lambda: 1),
+    )
+    monkeypatch.setattr("ragtone.up.time.monotonic", lambda: 0.0)
+
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) > 6:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("ragtone.up.time.sleep", fake_sleep)
+
+    procs = {
+        "serve": SimpleNamespace(poll=lambda: None),
+        "board": SimpleNamespace(poll=lambda: None),
+        "sync": SimpleNamespace(poll=lambda: 1),
+    }
+    _supervise(procs, config=None)
+
+    sync_restarts = [argv for argv in spawned if argv[-1] == "sync"]
+    assert len(sync_restarts) >= 2
+    backoff_delays = [s for s in sleeps if s != 0.4]
+    assert backoff_delays[:2] == [5, 10]
 
 
 def test_main_without_command_runs_up(monkeypatch, tmp_path: Path) -> None:

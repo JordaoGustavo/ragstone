@@ -96,5 +96,8 @@ class IngestWorker:
             return 0
         total = 0
         for connector in self.connectors:
-            total += await self.ingest_connector(connector, backfill=backfill)
+            try:
+                total += await self.ingest_connector(connector, backfill=backfill)
+            except Exception:
+                log.exception("%s ingest failed; continuing with other connectors", connector.name)
         return total

@@ -113,22 +113,42 @@ def run_up(
                 webbrowser.open(board_url)
             except Exception:
                 log.warning("could not open the browser")
-        _supervise(procs)
+        _supervise(procs, config=config)
     finally:
         for proc in procs.values():
             _stop(proc)
 
 
-def _supervise(procs: dict[str, subprocess.Popen]) -> None:
+_SYNC_BASE_BACKOFF = 5
+_SYNC_MAX_BACKOFF = 300
+# A sync that ran at least this long before dying isn't "flapping" — restart it at full speed.
+_SYNC_HEALTHY_UPTIME = _SYNC_BASE_BACKOFF * 4
+
+
+def _supervise(procs: dict[str, subprocess.Popen], *, config: Path | None = None) -> None:
+    reported: set[str] = set()
+    sync_failures = 0
+    sync_started_at = time.monotonic()
     try:
         while True:
-            for name, proc in procs.items():
+            for name, proc in list(procs.items()):
                 code = proc.poll()
-                if code is None:
+                if code is None or name in reported:
                     continue
+                reported.add(name)
                 log.warning("%s exited with %s", name, code)
                 if name in {"serve", "board"}:
                     return
+                if name == "sync":
+                    if time.monotonic() - sync_started_at > _SYNC_HEALTHY_UPTIME:
+                        sync_failures = 0
+                    delay = min(_SYNC_BASE_BACKOFF * (2**sync_failures), _SYNC_MAX_BACKOFF)
+                    sync_failures += 1
+                    log.warning("restarting sync in %ss", delay)
+                    time.sleep(delay)
+                    procs[name] = subprocess.Popen(child_argv(name, config=config))
+                    sync_started_at = time.monotonic()
+                    reported.discard(name)
             if all(proc.poll() is not None for proc in procs.values()):
                 return
             time.sleep(0.4)
