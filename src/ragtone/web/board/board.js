@@ -27,6 +27,9 @@ const adminProgressFill = document.getElementById("admin-progress-fill");
 const adminProgressLabel = document.getElementById("admin-progress-label");
 const adminDlq = document.getElementById("admin-dlq");
 const syncAll = document.getElementById("sync-all");
+const startBackfill = document.getElementById("start-backfill");
+const adminBackfillDays = document.getElementById("admin-backfill-days");
+const adminBackfillForm = document.getElementById("admin-backfill-form");
 const adminRecentState = new Map();
 let adminConnectorRows = [];
 let chatPeek = null;
@@ -1038,8 +1041,34 @@ function rangeLabel(days) {
   return found ? found.label : `${days}d`;
 }
 
+function backfillExtra(job) {
+  if (job.backfill_days === 0) return " (tudo)";
+  if (job.backfill_days != null) return ` (${rangeLabel(job.backfill_days)})`;
+  return " (desde o começo)";
+}
+
+let backfillRangeSeeded = false;
+
+function fillBackfillRange(preferred) {
+  if (!adminBackfillDays) return;
+  if (!adminBackfillDays.options.length) {
+    for (const option of CHANNEL_RANGES) {
+      const node = document.createElement("option");
+      node.value = String(option.days);
+      node.textContent = option.label;
+      if (option.days === 365) node.selected = true;
+      adminBackfillDays.appendChild(node);
+    }
+  }
+  if (!backfillRangeSeeded && preferred != null) {
+    adminBackfillDays.value = String(preferred);
+    backfillRangeSeeded = true;
+  }
+}
+
 function closeAdmin() {
   admin.hidden = true;
+  document.body.classList.remove("admin-open");
   clearTimeout(adminTimer);
   adminRecentState.clear();
   adminRecent.innerHTML = "";
@@ -1050,10 +1079,11 @@ function jobLine(job) {
   if (!job || job.status === "idle") return "";
   if (job.status === "running") {
     const counts = jobCounts(job);
-    return `Atualizando ${job.connector}…${counts}`;
+    const extra = job.backfill ? backfillExtra(job) : "";
+    return `Atualizando ${job.connector}…${counts}${extra}`;
   }
   if (job.status === "ok") {
-    const extra = job.backfill ? " (desde o começo)" : "";
+    const extra = job.backfill ? backfillExtra(job) : "";
     const dead = job.dlq ? ` · ${job.dlq} na DLQ` : "";
     return `Pronto — ${job.chunks} chunks em ${job.connector}${extra}${dead}`;
   }
@@ -1069,6 +1099,8 @@ function jobCounts(job) {
 function renderQueue(job) {
   const running = job?.status === "running";
   const percent = job?.percent;
+  const tools = document.querySelector(".admin-tools");
+  if (tools) tools.classList.toggle("is-live", Boolean(running));
   if (adminProgress) {
     adminProgress.hidden = !running && percent == null;
   }
@@ -1145,14 +1177,13 @@ function indexLine(index) {
   return `Elasticsearch ok · ${index.total} chunks${detail}`;
 }
 
-function connectorMeta(row) {
-  const bits = [
+function connectorFacts(row) {
+  return [
     row.enabled ? "ligado" : "desligado",
     row.mcp_configured ? `MCP ${row.mcp}` : `MCP ${row.mcp} faltando`,
     `${row.chunks} chunks`,
     row.checkpoint ? `checkpoint ${row.checkpoint}` : "nunca rodou",
   ];
-  return bits.join(" · ");
 }
 
 function watchEditor(row) {
@@ -1465,18 +1496,27 @@ function renderConnectors(data) {
   for (const row of data.connectors || []) {
     const card = document.createElement("article");
     card.className = "admin-connector";
+    card.dataset.source = row.name;
     const copy = document.createElement("div");
     const title = document.createElement("h4");
     title.textContent = row.name;
-    const meta = document.createElement("p");
-    meta.textContent = connectorMeta(row);
-    copy.append(title, meta);
+    const facts = document.createElement("ul");
+    facts.className = "admin-facts";
+    for (const fact of connectorFacts(row)) {
+      const item = document.createElement("li");
+      item.textContent = fact;
+      facts.appendChild(item);
+    }
+    copy.append(title, facts);
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.className = "admin-run";
     btn.textContent = "Atualizar";
     btn.disabled = running || !row.can_sync;
     btn.addEventListener("click", () => requestSync(row.name));
-    card.append(copy, btn, watchEditor(row));
+    const head = document.createElement("header");
+    head.append(copy, btn);
+    card.append(head, watchEditor(row));
     adminConnectors.appendChild(card);
   }
 }
@@ -1490,11 +1530,13 @@ function renderAdmin(data, { forceConnectors = false } = {}) {
     loadRecents();
   }
   lastJobStatus = jobStatus;
+  fillBackfillRange(data.backfill_days);
   adminJob.textContent = jobLine(data.job);
   renderQueue(data.job);
   adminIndex.textContent = indexLine(data.index);
   adminGaps.innerHTML = "";
   const gaps = data.gaps || [];
+  adminGaps.classList.toggle("ok", !gaps.length);
   if (!gaps.length) {
     const item = document.createElement("li");
     item.textContent = "Nada óbvio faltando.";
@@ -1508,12 +1550,14 @@ function renderAdmin(data, { forceConnectors = false } = {}) {
     }
   }
   const running = data.job?.status === "running";
+  const ready = (data.connectors || []).filter((row) => row.can_sync);
+  if (startBackfill) startBackfill.disabled = running || !ready.length;
   const focused = document.activeElement;
   const typing = Boolean(focused && focused.closest(".admin-watch"));
   if (!typing || forceConnectors) {
     renderConnectors(data);
   } else {
-    syncAll.disabled = running || !(data.connectors || []).some((row) => row.can_sync);
+    syncAll.disabled = running || !ready.length;
   }
   renderAdminRecents(data.connectors || []);
   if (running) {
@@ -1528,12 +1572,15 @@ async function refreshAdmin() {
   renderAdmin(data);
 }
 
-async function requestSync(name) {
-  const backfill = document.getElementById("admin-backfill").checked;
+async function requestSync(name, extra = {}) {
+  const body = { name, backfill: Boolean(extra.backfill) };
+  if (extra.backfill && extra.backfillDays != null) {
+    body.backfill_days = extra.backfillDays;
+  }
   const res = await fetch("/api/admin/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, backfill }),
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -1562,12 +1609,21 @@ function openAdmin() {
   inspector.hidden = true;
   closeFinder();
   admin.hidden = false;
+  document.body.classList.add("admin-open");
   refreshAdmin();
 }
 
 document.getElementById("open-admin").addEventListener("click", openAdmin);
 document.getElementById("close-admin").addEventListener("click", closeAdmin);
 syncAll.addEventListener("click", () => requestSync("all"));
+if (adminBackfillForm) {
+  fillBackfillRange();
+  adminBackfillForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const days = Number(adminBackfillDays.value);
+    requestSync("all", { backfill: true, backfillDays: Number.isNaN(days) ? 365 : days });
+  });
+}
 
 function paintUnreads(nodes) {
   if (!board || !nodes) return;

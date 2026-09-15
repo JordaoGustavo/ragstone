@@ -39,6 +39,7 @@ class Connector(Protocol):
         *,
         backfill: bool,
         cursor: dict[str, Any] | None,
+        backfill_days: int | None = None,
     ) -> Page: ...
 
     async def materialize(self, record: WorkRecord) -> FetchResult: ...

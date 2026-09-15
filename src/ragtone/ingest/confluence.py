@@ -53,10 +53,12 @@ class ConfluenceConnector:
         *,
         backfill: bool,
         cursor: dict[str, Any] | None,
+        backfill_days: int | None = None,
     ) -> Page:
         if not self.source.docs:
             return Page(done=True)
-        stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
+        days = self.backfill_days if backfill_days is None else backfill_days
+        stamp = checkpoint if checkpoint and not backfill else iso_days_ago(days)
         cql = scoped_cql(self.source.docs, self.source.cql, stamp)
         page = await search_page(
             self.caller,

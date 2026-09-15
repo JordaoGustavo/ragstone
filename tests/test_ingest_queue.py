@@ -113,7 +113,7 @@ class _Scripted:
     def __init__(self) -> None:
         self.pages = 0
 
-    async def next_page(self, checkpoint, *, backfill, cursor) -> Page:
+    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None) -> Page:
         self.pages += 1
         if cursor:
             return Page(done=True)
@@ -165,6 +165,77 @@ def test_board_http_enqueues_sync_on_injected_queue(tmp_path: Path) -> None:
     assert job["connector"] == "jira"
     again = client.post("/api/admin/sync", json={"name": "jira"})
     assert again.status_code == 409
+
+
+def test_board_http_enqueues_backfill_with_days(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        jira={"enabled": True, "mcp": "atlassian", "projects": ["ABC"]},
+        foundation_mcps=[FoundationMcp(name="atlassian", url="http://127.0.0.1:3001/mcp")],
+    )
+    app = create_app(settings)
+    queue = JobQueue()
+    app.state.ctx._queue = queue
+    client = TestClient(app)
+    response = client.post(
+        "/api/admin/sync",
+        json={"name": "jira", "backfill": True, "backfill_days": 90},
+    )
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["backfill"] is True
+    assert job["backfill_days"] == 90
+    run = queue.latest_run("jira")
+    assert run is not None
+    assert run.backfill is True
+    assert run.backfill_days == 90
+
+
+def test_board_http_rejects_invalid_backfill_range(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        jira={"enabled": True, "mcp": "atlassian", "projects": ["ABC"]},
+        foundation_mcps=[FoundationMcp(name="atlassian", url="http://127.0.0.1:3001/mcp")],
+    )
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/admin/sync",
+        json={"name": "jira", "backfill": True, "backfill_days": 99999},
+    )
+    assert response.status_code == 400
+    assert "backfill_days" in response.json()["error"]
+
+
+class _RangeRecorder:
+    name = "jira"
+
+    def __init__(self) -> None:
+        self.days: list[int | None] = []
+
+    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None) -> Page:
+        self.days.append(backfill_days)
+        return Page(done=True)
+
+    async def materialize(self, record: WorkRecord) -> FetchResult:
+        return FetchResult()
+
+
+def test_worker_passes_run_backfill_days(tmp_path: Path) -> None:
+    recorder = _RangeRecorder()
+    queue = JobQueue()
+    queue.create_run("jira", backfill=True, backfill_days=90)
+    worker = IngestWorker(
+        InMemoryIndex(),
+        HashEmbedder(8),
+        CheckpointStore(tmp_path / "checkpoints.json"),
+        [recorder],
+        poll_seconds=1,
+        queue=queue,
+    )
+    asyncio.run(worker.drain())
+    assert recorder.days == [90]
 
 
 def test_board_http_admin_shows_queue_progress(tmp_path: Path) -> None:

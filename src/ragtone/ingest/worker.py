@@ -98,7 +98,7 @@ class IngestWorker:
             return True
         run = self.queue.next_to_produce(names)
         if run is not None:
-            await self._produce(run.id, run.connector, run.backfill, run.page_cursor)
+            await self._produce(run)
             return True
         finished = False
         for active in self.queue.active_runs():
@@ -135,29 +135,28 @@ class IngestWorker:
                     continue
             self.queue.create_run(connector.name, backfill=False)
 
-    async def _produce(
-        self,
-        run_id: str,
-        name: str,
-        backfill: bool,
-        cursor: dict | None,
-    ) -> None:
+    async def _produce(self, run) -> None:
         try:
-            connector = self._connector(name)
-            checkpoint = self.checkpoints.get(name)
-            page = await connector.next_page(checkpoint, backfill=backfill, cursor=cursor)
-            run = self.queue.accept_page(run_id, page)
+            connector = self._connector(run.connector)
+            checkpoint = self.checkpoints.get(run.connector)
+            page = await connector.next_page(
+                checkpoint,
+                backfill=run.backfill,
+                cursor=run.page_cursor,
+                backfill_days=run.backfill_days,
+            )
+            accepted = self.queue.accept_page(run.id, page)
             log.info(
                 "%s search page %s: +%s (discovered %s%s)",
-                name,
-                run.pages,
+                run.connector,
+                accepted.pages,
                 len(page.records),
-                run.discovered,
-                f"/{run.total}" if run.total is not None else "",
+                accepted.discovered,
+                f"/{accepted.total}" if accepted.total is not None else "",
             )
         except Exception as exc:
-            log.exception("%s ingest failed; continuing with other connectors", name)
-            self.queue.fail_run(run_id, str(exc))
+            log.exception("%s ingest failed; continuing with other connectors", run.connector)
+            self.queue.fail_run(run.id, str(exc))
 
     async def _consume(self, item) -> None:
         try:

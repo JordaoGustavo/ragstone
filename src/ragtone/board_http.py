@@ -35,7 +35,7 @@ from ragtone.ingest.run import IngestConfigError, with_worker
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
 from ragtone.channel_preview import peek_chat
-from ragtone.watches import WatchStore, parse_targets
+from ragtone.watches import WatchStore, parse_backfill_days, parse_targets
 
 log = logging.getLogger(__name__)
 WEB = Path(__file__).parent / "web" / "board"
@@ -401,6 +401,13 @@ async def start_sync(request: Request) -> JSONResponse:
     body = await request.json()
     name = str(body.get("name") or body.get("connector") or "").strip()
     backfill = bool(body.get("backfill"))
+    days = None
+    if "backfill_days" in body:
+        backfill = True
+        try:
+            days = parse_backfill_days(body.get("backfill_days"))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
     if name not in {"jira", "confluence", "chat", "all"}:
         return JSONResponse({"error": "conector desconhecido"}, status_code=400)
     names, error = _sync_names(ctx, name)
@@ -416,7 +423,7 @@ async def start_sync(request: Request) -> JSONResponse:
     if busy:
         return JSONResponse({"error": "já tem uma atualização em curso"}, status_code=409)
     for item in names:
-        queue.create_run(item, backfill=backfill)
+        queue.create_run(item, backfill=backfill, backfill_days=days)
     ctx.job = queue.admin_job()
     if ctx.live_index() is not None:
         ctx._sync_task = asyncio.create_task(_run_sync(ctx, names))

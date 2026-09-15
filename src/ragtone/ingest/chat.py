@@ -30,11 +30,13 @@ class ChatConnector:
         self.default_days = default_days
         self.checkpoints = checkpoints
 
-    def _oldest(self, channel: str, *, backfill: bool) -> str:
+    def _oldest(self, channel: str, *, backfill: bool, backfill_days: int | None = None) -> str:
         key = f"chat:{channel}"
         saved = self.checkpoints.get(key) if self.checkpoints is not None else None
         if backfill or not saved:
-            days = self.source.channel_windows.get(channel)
+            days = backfill_days
+            if days is None:
+                days = self.source.channel_windows.get(channel)
             if days is None:
                 days = self.default_days
             return unix_days_ago(days)
@@ -49,6 +51,7 @@ class ChatConnector:
         *,
         backfill: bool,
         cursor: dict[str, Any] | None,
+        backfill_days: int | None = None,
     ) -> Page:
         channels = self.source.channels
         if not channels:
@@ -58,7 +61,7 @@ class ChatConnector:
         if index >= len(channels):
             return Page(done=True)
         channel = channels[index]
-        oldest = self._oldest(channel, backfill=backfill)
+        oldest = self._oldest(channel, backfill=backfill, backfill_days=backfill_days)
         extra = state.get("h") if isinstance(state.get("h"), dict) else None
         page = await search_page(
             self.caller,

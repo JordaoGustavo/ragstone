@@ -31,6 +31,7 @@ class IngestRun:
     id: str
     connector: str
     backfill: bool = False
+    backfill_days: int | None = None
     status: str = "pending"
     producer_done: bool = False
     page_cursor: dict[str, Any] | None = None
@@ -83,6 +84,7 @@ def run_from_doc(doc: dict[str, Any], *, run_id: str | None = None) -> IngestRun
         id=str(doc.get("id") or run_id or ""),
         connector=str(doc.get("connector") or ""),
         backfill=bool(doc.get("backfill")),
+        backfill_days=int(doc["backfill_days"]) if doc.get("backfill_days") is not None else None,
         status=str(doc.get("status") or "pending"),
         producer_done=bool(doc.get("producer_done")),
         page_cursor=doc.get("page_cursor") if isinstance(doc.get("page_cursor"), dict) else None,
@@ -175,6 +177,7 @@ def job_view(
             "status": "idle",
             "connector": None,
             "backfill": False,
+            "backfill_days": None,
             "chunks": 0,
             "error": None,
             "percent": None,
@@ -197,6 +200,7 @@ def job_view(
         totals = [item.total for item in listed if item.total is not None]
         total = sum(totals) if len(totals) == len(listed) else None
         backfill = any(item.backfill for item in listed)
+        backfill_days = next((item.backfill_days for item in listed if item.backfill), None)
         percent = progress_percent(
             IngestRun(
                 id="",
@@ -213,6 +217,7 @@ def job_view(
             "status": status,
             "connector": connector,
             "backfill": backfill,
+            "backfill_days": backfill_days,
             "chunks": chunks,
             "error": error,
             "percent": percent,
@@ -228,6 +233,7 @@ def job_view(
         "status": status,
         "connector": run.connector,
         "backfill": run.backfill,
+        "backfill_days": run.backfill_days if run.backfill else None,
         "chunks": run.chunks,
         "error": run.error,
         "percent": progress_percent(run),
@@ -247,6 +253,7 @@ def _run_summary(run: IngestRun) -> dict[str, Any]:
         "connector": run.connector,
         "status": run.status,
         "backfill": run.backfill,
+        "backfill_days": run.backfill_days if run.backfill else None,
         "percent": progress_percent(run),
         "discovered": run.discovered,
         "indexed": run.indexed,

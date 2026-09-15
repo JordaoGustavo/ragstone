@@ -24,7 +24,9 @@ class _NamedConnector:
         self.calls = 0
         self._sent = False
 
-    async def next_page(self, checkpoint: str | None, *, backfill: bool, cursor) -> Page:
+    async def next_page(
+        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None
+    ) -> Page:
         self.calls += 1
         if self._sent:
             return Page(done=True)
@@ -67,6 +69,7 @@ def test_snapshot_flags_disabled_connectors_when_es_is_down() -> None:
     assert ("disabled", "confluence") in codes
     assert ("disabled", "chat") in codes
     assert all(not row["can_sync"] for row in data["connectors"])
+    assert data["backfill_days"] == 365
 
 
 def test_snapshot_flags_enabled_jira_that_never_ran() -> None:

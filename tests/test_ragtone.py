@@ -88,7 +88,9 @@ class _ScriptedConnector:
         self._watermark = watermark
         self._sent = False
 
-    async def next_page(self, checkpoint: str | None, *, backfill: bool, cursor) -> Page:
+    async def next_page(
+        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None
+    ) -> Page:
         if self._sent:
             return Page(done=True)
         self._sent = True
@@ -123,7 +125,9 @@ def test_ingest_worker_upserts_and_saves_watermark(tmp_path: Path) -> None:
 class _BoomConnector:
     name = "confluence"
 
-    async def next_page(self, checkpoint: str | None, *, backfill: bool, cursor) -> Page:
+    async def next_page(
+        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None
+    ) -> Page:
         raise RuntimeError("upstream 500")
 
     async def materialize(self, record: WorkRecord) -> FetchResult:

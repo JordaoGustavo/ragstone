@@ -98,51 +98,46 @@
         </div>
       </section>
       <section id="admin" hidden>
-        <header class="admin-head">
-          <div>
-            <p class="search-label">Admin</p>
-            <h2>Índice e conectores</h2>
-            <p class="admin-lede">
-              O que o índice viu, o que ainda falta, quais canais / boards /
-              docs olhar, e um empurrão nos conectores.
-            </p>
-          </div>
-          <button type="button" id="close-admin" class="ghost">Fechar</button>
-        </header>
-        <p id="admin-job" class="status"></p>
-        <label class="admin-backfill">
-          <input id="admin-backfill" type="checkbox" />
-          Desde o começo (backfill)
-        </label>
-        <section class="admin-block">
-          <h3>Fila</h3>
-          <div id="admin-progress" hidden>
-            <div class="admin-progress-track">
-              <span id="admin-progress-fill"></span>
+        <div class="admin-sheet">
+          <header class="admin-head">
+            <div class="admin-title">
+              <p class="search-label">Admin</p>
+              <h2>Índice</h2>
             </div>
-            <p id="admin-progress-label"></p>
-          </div>
-          <div id="admin-dlq"></div>
-        </section>
-        <section class="admin-block">
-          <h3>Índice</h3>
-          <p id="admin-index"></p>
-        </section>
-        <section class="admin-block">
-          <h3>O que falta</h3>
-          <ul id="admin-gaps"></ul>
-        </section>
-        <section class="admin-block">
-          <div class="admin-block-head">
-            <h3>Conectores</h3>
+            <p id="admin-index"></p>
+            <button type="button" id="close-admin" class="ghost">Fechar</button>
+          </header>
+          <div class="admin-tools">
+            <form id="admin-backfill-form" class="admin-backfill">
+              <label>
+                <span class="search-label">Quanto tempo para trás</span>
+                <select
+                  id="admin-backfill-days"
+                  aria-label="Quanto tempo para trás"
+                ></select>
+              </label>
+              <button type="submit" id="start-backfill">Começar backfill</button>
+            </form>
             <button type="button" id="sync-all">Atualizar todos</button>
+            <p id="admin-job"></p>
+            <div id="admin-progress" hidden>
+              <div class="admin-progress-track">
+                <span id="admin-progress-fill"></span>
+              </div>
+              <p id="admin-progress-label"></p>
+            </div>
+            <div id="admin-dlq"></div>
           </div>
-          <div id="admin-connectors"></div>
-        </section>
-        <section class="admin-block">
-          <h3>Recentes no índice</h3>
-          <div id="admin-recent"></div>
-        </section>
+          <ul id="admin-gaps"></ul>
+          <section class="admin-block">
+            <h3>Conectores</h3>
+            <div id="admin-connectors"></div>
+          </section>
+          <section class="admin-block">
+            <h3>Recentes no índice</h3>
+            <div id="admin-recent"></div>
+          </section>
+        </div>
       </section>
     </main>
     <aside id="inspector" hidden>

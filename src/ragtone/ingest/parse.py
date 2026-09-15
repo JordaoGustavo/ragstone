@@ -40,6 +40,8 @@ def as_records(payload: Any, *keys: str) -> list[dict[str, Any]]:
 
 
 def iso_days_ago(days: int) -> str:
+    if days <= 0:
+        return "1970-01-01"
     start = datetime.now(timezone.utc) - timedelta(days=days)
     return start.date().isoformat()
 

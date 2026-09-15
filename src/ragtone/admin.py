@@ -128,4 +128,5 @@ def snapshot(
         },
         "recent": recent,
         "job": job,
+        "backfill_days": int(settings.backfill_days),
     }

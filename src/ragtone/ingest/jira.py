@@ -52,10 +52,12 @@ class JiraConnector:
         *,
         backfill: bool,
         cursor: dict[str, Any] | None,
+        backfill_days: int | None = None,
     ) -> Page:
         if not self.source.projects:
             return Page(done=True)
-        stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
+        days = self.backfill_days if backfill_days is None else backfill_days
+        stamp = checkpoint if checkpoint and not backfill else iso_days_ago(days)
         jql = scoped_jql(self.source.projects, self.source.jql, stamp)
         page = await search_page(
             self.caller,

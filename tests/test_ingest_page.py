@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from ragtone.ingest.chat import ChatConnector
 from ragtone.ingest.confluence import ConfluenceConnector
 from ragtone.ingest.jira import JiraConnector
-from ragtone.ingest.parse import as_records
+from ragtone.ingest.parse import as_records, iso_days_ago
 from ragtone.settings import ChatSource, ConfluenceSource, JiraSource
 
 
@@ -179,3 +180,37 @@ def test_chat_backfill_follows_history_cursor() -> None:
     assert len(history_calls) == 2
     assert history_calls[1].get("cursor") == "c2"
     assert result.watermarks["chat:eng"] == "1710000100.000000"
+
+
+def test_iso_days_ago_zero_is_epoch() -> None:
+    assert iso_days_ago(0) == "1970-01-01"
+
+
+def test_jira_backfill_uses_explicit_days() -> None:
+    caller = _Pager(search=[{"issues": [], "isLast": True}])
+    connector = JiraConnector(
+        JiraSource(enabled=True, projects=["ABC"]),
+        caller,
+        cloud_id="https://example.atlassian.net",
+        backfill_days=365,
+        pause=0,
+    )
+    asyncio.run(connector.next_page(None, backfill=True, cursor=None, backfill_days=7))
+    expected = (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+    assert expected in caller.calls[0][1]["jql"]
+    asyncio.run(connector.next_page(None, backfill=True, cursor=None, backfill_days=0))
+    assert "1970-01-01" in caller.calls[1][1]["jql"]
+
+
+def test_chat_backfill_uses_explicit_days_over_channel_window() -> None:
+    caller = _Pager(history=[{"messages": [], "has_more": False}])
+    connector = ChatConnector(
+        ChatSource(enabled=True, channels=["eng"], channel_windows={"eng": 30}),
+        caller,
+        pause=0,
+        default_days=365,
+    )
+    asyncio.run(connector.next_page(None, backfill=True, cursor=None, backfill_days=7))
+    oldest = caller.calls[0][1]["oldest"]
+    age = datetime.now(timezone.utc).timestamp() - float(oldest)
+    assert 6 * 86400 < age < 8 * 86400

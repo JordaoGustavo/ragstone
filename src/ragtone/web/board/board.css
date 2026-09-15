@@ -842,18 +842,28 @@ body.finder-open .spot-launch {
   padding-top: 10px;
 }
 
+body.admin-open .spot-launch,
+body.admin-open .rail-peek {
+  display: none;
+}
+
 #admin {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 8;
+  z-index: 20;
   overflow: auto;
-  padding: 28px 36px 72px;
   background: #f3eee4;
   color: var(--ink);
 }
 
 #admin[hidden] {
   display: none;
+}
+
+.admin-sheet {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 22px 28px 72px;
 }
 
 #admin .ghost {
@@ -865,45 +875,113 @@ body.finder-open .spot-launch {
 }
 
 .admin-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 8px 20px;
+  margin: 0 0 16px;
+  padding: 6px 0 14px;
+  background: #f3eee4;
+  border-bottom: 1px solid #d9cfc0;
+}
+
+.admin-title .search-label {
+  margin: 0 0 4px;
+  color: #8a7d6c;
 }
 
 #admin h2 {
-  margin: 4px 0 8px;
+  margin: 0;
   font-family: Syne, sans-serif;
-  font-size: 28px;
-  letter-spacing: -0.04em;
+  font-size: 34px;
+  letter-spacing: -0.05em;
+  line-height: 0.9;
 }
 
-.admin-lede,
+#close-admin {
+  grid-column: 2;
+  grid-row: 1;
+}
+
 #admin-index {
-  margin: 0;
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
   color: #5c5348;
-  font-size: 15px;
-  line-height: 1.45;
+  font: 500 13px "IBM Plex Mono", monospace;
+  letter-spacing: 0.02em;
+}
+
+.admin-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px 14px;
+  margin: 0 0 14px;
+  padding: 14px 16px 14px 18px;
+  background: #efe6d6;
+  border: 1px solid #d9cfc0;
+  border-left: 4px solid var(--copper);
+}
+
+.admin-tools.is-live {
+  border-color: var(--copper);
 }
 
 .admin-backfill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 12px 0 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px 12px;
   color: #5c5348;
   font-size: 14px;
 }
 
-#admin .status {
+.admin-backfill label {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-backfill .search-label {
+  margin: 0;
+  color: #8a7d6c;
+}
+
+.admin-backfill select {
+  min-width: 148px;
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid #d9cfc0;
+  padding: 8px 10px;
+  font: 14px "Atkinson Hyperlegible", sans-serif;
+}
+
+.admin-backfill select:focus {
+  outline: 1px solid var(--copper);
+}
+
+#admin-job {
+  flex: 1 1 100%;
+  margin: 0;
   color: var(--copper-dim);
+  font: 600 15px "Atkinson Hyperlegible", sans-serif;
+}
+
+#admin-job:empty {
+  display: none;
+}
+
+#admin-progress,
+#admin-dlq {
+  flex: 1 1 100%;
 }
 
 .admin-progress-track {
   height: 8px;
-  margin: 8px 0;
-  background: #efe6d6;
+  margin: 2px 0 6px;
+  background: #f3eee4;
   border: 1px solid #d9cfc0;
 }
 
@@ -922,7 +1000,7 @@ body.finder-open .spot-launch {
 
 .admin-dlq {
   list-style: none;
-  margin: 12px 0 0;
+  margin: 4px 0 0;
   padding: 0;
 }
 
@@ -964,11 +1042,10 @@ body.finder-open .spot-launch {
 }
 
 .admin-block {
-  margin: 22px 0;
+  margin: 22px 0 0;
 }
 
-.admin-block h3,
-.admin-block-head h3 {
+.admin-block h3 {
   margin: 0 0 10px;
   font: 600 11px "IBM Plex Mono", monospace;
   letter-spacing: 0.08em;
@@ -976,45 +1053,92 @@ body.finder-open .spot-launch {
   color: #8a7d6c;
 }
 
-.admin-block-head {
+#admin-gaps {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
 }
 
-#admin-gaps {
-  margin: 0;
-  padding-left: 18px;
+#admin-gaps li {
+  padding: 6px 10px;
+  background: #fffaf3;
+  border: 1px solid #d9cfc0;
   color: #3f372f;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+#admin-gaps.ok li {
+  background: transparent;
+  color: #8a7d6c;
+}
+
+#admin-connectors,
+#admin-recent {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .admin-connector {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-items: start;
-  margin-bottom: 8px;
-  padding: 12px 14px;
+  min-width: 0;
+  padding: 14px 14px 16px;
   background: #fffaf3;
   border: 1px solid #d9cfc0;
+  border-left-width: 4px;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+}
+
+.admin-connector[data-source="jira"] {
+  border-left-color: var(--jira);
+}
+
+.admin-connector[data-source="confluence"] {
+  border-left-color: var(--confluence);
+}
+
+.admin-connector[data-source="chat"] {
+  border-left-color: var(--chat);
+}
+
+.admin-connector header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 10px;
 }
 
 .admin-connector h4 {
-  margin: 0 0 4px;
+  margin: 0 0 8px;
   font-family: Syne, sans-serif;
-  font-size: 18px;
+  font-size: 22px;
+  letter-spacing: -0.03em;
 }
 
-.admin-connector p {
+.admin-facts {
+  list-style: none;
   margin: 0;
+  padding: 0;
   color: #5c5348;
-  font-size: 13px;
+  font: 500 12px "IBM Plex Mono", monospace;
+  line-height: 1.45;
 }
 
+.admin-facts li + li {
+  margin-top: 1px;
+}
+
+#start-backfill,
 #sync-all,
-.admin-connector button {
+.admin-run,
+.admin-connector .watch-add button,
+.admin-connector .watch-confirm button {
   background: var(--copper);
   color: var(--ink);
   border: 0;
@@ -1023,19 +1147,16 @@ body.finder-open .spot-launch {
   cursor: pointer;
 }
 
+#start-backfill:disabled,
 #sync-all:disabled,
-.admin-connector button:disabled {
+.admin-run:disabled {
   background: #d9cfc0;
   color: #8a7d6c;
   cursor: not-allowed;
 }
 
-.admin-watch {
-  grid-column: 1 / -1;
-}
-
 .admin-watch .search-label {
-  margin: 4px 0 8px;
+  margin: 0 0 8px;
   color: #8a7d6c;
 }
 
@@ -1142,13 +1263,15 @@ body.finder-open .spot-launch {
 }
 
 .admin-recent-source {
-  margin-bottom: 8px;
+  min-width: 0;
   padding: 12px 14px;
   background: #fffaf3;
   border: 1px solid #d9cfc0;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
 }
 
 .admin-recent-source.is-open {
+  grid-column: 1 / -1;
   border-color: var(--copper);
 }
 
@@ -1209,6 +1332,25 @@ body.finder-open .spot-launch {
 
 #admin-recent .hit {
   color: var(--paper);
+}
+
+@media (max-width: 900px) {
+  .admin-sheet {
+    padding: 16px 16px 64px;
+  }
+
+  .admin-head {
+    grid-template-columns: 1fr auto;
+  }
+
+  #admin-index {
+    grid-column: 1 / -1;
+  }
+
+  #admin-connectors,
+  #admin-recent {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
