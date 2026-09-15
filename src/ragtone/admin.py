@@ -47,15 +47,12 @@ def connector_rows(
         configured = mcp_is_configured(settings, spec.mcp)
         targets = parse_targets(name, watching.get(name) or [])
         ids = [item["id"] for item in targets]
-        checkpoint = checkpoints.get(name)
-        if name == "chat":
-            stamps = [
-                value
-                for key, value in checkpoints.items()
-                if key == "chat" or str(key).startswith("chat:")
-            ]
-            if stamps:
-                checkpoint = max(stamps)
+        stamps = [
+            value
+            for key, value in checkpoints.items()
+            if key == name or str(key).startswith(f"{name}:")
+        ]
+        checkpoint = max(stamps) if stamps else checkpoints.get(name)
         row: dict[str, Any] = {
             "name": name,
             "enabled": spec.enabled,

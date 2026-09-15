@@ -7,6 +7,7 @@ from ragtone.checkpoints import CheckpointStore
 from ragtone.ingest.base import Page, WorkRecord
 from ragtone.ingest.jobs import (
     ACTIVE,
+    CANCELLED,
     CLAIM_STALE,
     LEASE_ID,
     LEASE_TTL,
@@ -95,6 +96,17 @@ class MemoryBackend:
         items = [item for item in self.items.values() if item.status == "dlq"]
         items.sort(key=lambda item: item.updated_at, reverse=True)
         return items[:limit]
+
+    def cancel_unfinished(self, run_id: str, *, now: str) -> int:
+        count = 0
+        for item in self.items.values():
+            if item.run_id != run_id or item.status not in UNFINISHED:
+                continue
+            item.status = CANCELLED
+            item.claimed_at = None
+            item.updated_at = now
+            count += 1
+        return count
 
     def load_lease(self) -> tuple[str, str] | None:
         return self.lease
@@ -297,6 +309,30 @@ class ElasticsearchBackend:
             for hit in response.get("hits", {}).get("hits") or []
         ]
 
+    def cancel_unfinished(self, run_id: str, *, now: str) -> int:
+        response = self.es.update_by_query(
+            index=self.items_index,
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"run_id": run_id}},
+                        {"terms": {"status": list(UNFINISHED)}},
+                    ]
+                }
+            },
+            script={
+                "source": (
+                    "ctx._source.status = params.status; "
+                    "ctx._source.claimed_at = null; "
+                    "ctx._source.updated_at = params.now;"
+                ),
+                "params": {"status": CANCELLED, "now": now},
+            },
+            refresh=True,
+            conflicts="proceed",
+        )
+        return int(response.get("updated") or 0)
+
     def load_lease(self) -> tuple[str, str] | None:
         from elasticsearch import NotFoundError
 
@@ -371,8 +407,26 @@ class JobQueue:
         runs = self._b.list_runs(connector=connector, limit=1)
         return runs[0] if runs else None
 
+    def cancel_run(self, run_id: str) -> IngestRun:
+        run = self._require_run(run_id)
+        if run.status not in ACTIVE:
+            return run
+        now = now_iso()
+        self._b.cancel_unfinished(run_id, now=now)
+        run.status = CANCELLED
+        run.producer_done = True
+        run.page_cursor = None
+        run.updated_at = now
+        self._b.save_run(run)
+        return run
+
+    def cancel_active(self) -> list[IngestRun]:
+        return [self.cancel_run(run.id) for run in self.active_runs()]
+
     def accept_page(self, run_id: str, page: Page) -> IngestRun:
         run = self._require_run(run_id)
+        if run.status not in ACTIVE:
+            return run
         stamp = now_iso()
         accepted = 0
         for record in page.records:
@@ -425,17 +479,33 @@ class JobQueue:
 
         now = now_iso()
         stale_before = later_iso(-CLAIM_STALE, start=now)
-        item = self._b.find_claimable(connectors=connectors, now=now, stale_before=stale_before)
-        if item is None:
-            return None
-        item.status = "running"
-        item.claimed_at = now
-        item.updated_at = now
-        try:
-            self._b.save_item(item, seq_no=item.seq_no, primary_term=item.primary_term)
-        except ConflictError:
-            return self.claim_item(connectors)
-        return item
+        while True:
+            item = self._b.find_claimable(
+                connectors=connectors, now=now, stale_before=stale_before
+            )
+            if item is None:
+                return None
+            run = self._b.load_run(item.run_id)
+            if run is None or run.status not in ACTIVE:
+                if item.status in UNFINISHED:
+                    item.status = CANCELLED
+                    item.claimed_at = None
+                    item.updated_at = now
+                    try:
+                        self._b.save_item(
+                            item, seq_no=item.seq_no, primary_term=item.primary_term
+                        )
+                    except ConflictError:
+                        pass
+                continue
+            item.status = "running"
+            item.claimed_at = now
+            item.updated_at = now
+            try:
+                self._b.save_item(item, seq_no=item.seq_no, primary_term=item.primary_term)
+            except ConflictError:
+                continue
+            return item
 
     def succeed(self, item: IngestItem, *, chunks: int, watermark: str | None) -> None:
         now = now_iso()
@@ -449,8 +519,9 @@ class JobQueue:
         run = self._require_run(item.run_id)
         run.indexed += 1
         run.chunks += chunks
-        run.status = "running"
         run.updated_at = now
+        if run.status in ACTIVE:
+            run.status = "running"
         self._b.save_run(run)
 
     def fail_item(
@@ -474,12 +545,15 @@ class JobQueue:
             item.status = "retry"
             item.next_retry_at = now
         run.updated_at = now
-        run.status = "running"
+        if run.status in ACTIVE:
+            run.status = "running"
         self._b.save_item(item)
         self._b.save_run(run)
 
     def fail_run(self, run_id: str, error: str) -> None:
         run = self._require_run(run_id)
+        if run.status not in ACTIVE:
+            return
         run.status = "error"
         run.error = error
         run.producer_done = True

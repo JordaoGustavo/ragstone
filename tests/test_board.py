@@ -214,19 +214,27 @@ def test_admin_page_opens_recents_per_connector(tmp_path: Path) -> None:
     assert 'id="admin-recent"' in page
     assert 'id="start-backfill"' in page
     assert 'id="admin-backfill-days"' in page
+    assert 'id="admin-backfill-connectors"' in page
+    assert 'id="stop-sync"' in page
     js = client.get("/static/board.js").text
     assert "start-backfill" in js
     assert "backfill_days" in js
+    assert "fillBackfillConnectors" in js
+    assert "/api/admin/sync/stop" in js
     assert "toggleAdminRecent" in js
     assert "admin-open" in js
     assert "/api/recent?source=" in js
     assert "lookAtChat" in js
+    assert "lookAtWatch" in js
+    assert "Primeiro corte" in js
     assert "/api/admin/peek" in js
     css = client.get("/static/board.css").text
     assert ".admin-recent-source" in css
     assert ".admin-tools" in css
     assert ".admin-sheet" in css
+    assert ".admin-backfill-connectors" in css
     assert ".watch-peek" in css
+    assert ".watch-presets" in css
     admin = client.get("/api/admin").json()
     assert admin["recent"] == []
     assert [row["name"] for row in admin["connectors"]] == ["jira", "confluence", "chat"]

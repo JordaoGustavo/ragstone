@@ -28,11 +28,13 @@ const adminProgressLabel = document.getElementById("admin-progress-label");
 const adminDlq = document.getElementById("admin-dlq");
 const syncAll = document.getElementById("sync-all");
 const startBackfill = document.getElementById("start-backfill");
+const stopSync = document.getElementById("stop-sync");
 const adminBackfillDays = document.getElementById("admin-backfill-days");
 const adminBackfillForm = document.getElementById("admin-backfill-form");
+const adminBackfillConnectors = document.getElementById("admin-backfill-connectors");
 const adminRecentState = new Map();
 let adminConnectorRows = [];
-let chatPeek = null;
+let sourcePeek = null;
 
 const CONNECTORS = [
   { id: "chat", label: "chat" },
@@ -1015,9 +1017,27 @@ const GAP_COPY = {
 };
 
 const WATCH_UI = {
-  chat: { title: "Canais do Slack", placeholder: "cola o link do canal" },
-  jira: { title: "Boards / projetos", placeholder: "ABC" },
-  confluence: { title: "Docs / espaços", placeholder: "ENG ou 123456" },
+  chat: {
+    title: "Canais do Slack",
+    placeholder: "cola o link do canal",
+    looking: "olhando o canal…",
+    noun: "canal",
+    fail: "não deu para olhar o canal",
+  },
+  jira: {
+    title: "Boards / projetos",
+    placeholder: "cola o link do Jira ou ABC",
+    looking: "olhando o projeto…",
+    noun: "projeto",
+    fail: "não deu para olhar o projeto",
+  },
+  confluence: {
+    title: "Docs / espaços",
+    placeholder: "cola o link da página ou ENG",
+    looking: "olhando o doc…",
+    noun: "doc",
+    fail: "não deu para olhar o doc",
+  },
 };
 
 const CHANNEL_RANGES = [
@@ -1039,6 +1059,42 @@ function rangeLabel(days) {
   if (days == null) return "";
   const found = CHANNEL_RANGES.find((item) => item.days === days);
   return found ? found.label : `${days}d`;
+}
+
+function padDate(value) {
+  return String(value).padStart(2, "0");
+}
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${padDate(d.getMonth() + 1)}-${padDate(d.getDate())}`;
+}
+
+function daysAgoISO(days) {
+  if (days === 0) return "1970-01-01";
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - days);
+  return `${d.getFullYear()}-${padDate(d.getMonth() + 1)}-${padDate(d.getDate())}`;
+}
+
+function defaultCutoff() {
+  return daysAgoISO(90);
+}
+
+function cutoffLabel(item) {
+  if (item.cutoff) {
+    if (item.cutoff <= "1970-01-01") return "tudo";
+    return `desde ${item.cutoff}`;
+  }
+  return rangeLabel(item.backfill_days);
+}
+
+function watchNoun(peek) {
+  if (peek?.kind === "page") return "página";
+  if (peek?.kind === "space") return "espaço";
+  const spec = WATCH_UI[peek?.source] || {};
+  return spec.noun || "alvo";
 }
 
 function backfillExtra(job) {
@@ -1066,13 +1122,45 @@ function fillBackfillRange(preferred) {
   }
 }
 
+function fillBackfillConnectors(connectors) {
+  if (!adminBackfillConnectors) return;
+  const rows = connectors || [];
+  const ids = rows.map((row) => `${row.name}:${row.can_sync ? 1 : 0}`).join(",");
+  if (adminBackfillConnectors.dataset.ids === ids) return;
+  const previous = new Map(
+    [...adminBackfillConnectors.querySelectorAll('input[name="backfill-connector"]')].map(
+      (node) => [node.value, { checked: node.checked, ready: node.dataset.ready === "1" }],
+    ),
+  );
+  for (const node of adminBackfillConnectors.querySelectorAll("label")) {
+    node.remove();
+  }
+  for (const row of rows) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.name = "backfill-connector";
+    input.value = row.name;
+    input.dataset.ready = row.can_sync ? "1" : "";
+    input.disabled = !row.can_sync;
+    const prior = previous.get(row.name);
+    input.checked = Boolean(row.can_sync) && (prior && prior.ready ? prior.checked : true);
+    const text = document.createElement("span");
+    text.textContent = row.name;
+    label.append(input, text);
+    if (!row.can_sync) label.classList.add("is-off");
+    adminBackfillConnectors.appendChild(label);
+  }
+  adminBackfillConnectors.dataset.ids = ids;
+}
+
 function closeAdmin() {
   admin.hidden = true;
   document.body.classList.remove("admin-open");
   clearTimeout(adminTimer);
   adminRecentState.clear();
   adminRecent.innerHTML = "";
-  chatPeek = null;
+  sourcePeek = null;
 }
 
 function jobLine(job) {
@@ -1081,6 +1169,10 @@ function jobLine(job) {
     const counts = jobCounts(job);
     const extra = job.backfill ? backfillExtra(job) : "";
     return `Atualizando ${job.connector}…${counts}${extra}`;
+  }
+  if (job.status === "cancelled") {
+    const extra = job.backfill ? backfillExtra(job) : "";
+    return `Parado — ${job.connector}${extra}`;
   }
   if (job.status === "ok") {
     const extra = job.backfill ? backfillExtra(job) : "";
@@ -1101,6 +1193,10 @@ function renderQueue(job) {
   const percent = job?.percent;
   const tools = document.querySelector(".admin-tools");
   if (tools) tools.classList.toggle("is-live", Boolean(running));
+  if (stopSync) {
+    stopSync.hidden = !running;
+    stopSync.disabled = !running;
+  }
   if (adminProgress) {
     adminProgress.hidden = !running && percent == null;
   }
@@ -1187,7 +1283,7 @@ function connectorFacts(row) {
 }
 
 function watchEditor(row) {
-  const spec = WATCH_UI[row.name] || { title: "Onde olhar", placeholder: "" };
+  const spec = WATCH_UI[row.name] || { title: "Onde olhar", placeholder: "", looking: "olhando…", noun: "alvo", fail: "não deu" };
   const wrap = document.createElement("form");
   wrap.className = "admin-watch";
   wrap.dataset.source = row.name;
@@ -1199,7 +1295,7 @@ function watchEditor(row) {
   const items = asTargets(row);
   for (const item of items) {
     const li = document.createElement("li");
-    const range = row.name === "chat" ? rangeLabel(item.backfill_days) : "";
+    const range = cutoffLabel(item);
     li.textContent = range ? `${item.id} · ${range}` : item.id;
     const drop = document.createElement("button");
     drop.type = "button";
@@ -1222,56 +1318,51 @@ function watchEditor(row) {
     chips.appendChild(empty);
   }
   const add = document.createElement("div");
-  add.className = row.name === "chat" ? "watch-add chat" : "watch-add";
+  add.className = "watch-add";
   const input = document.createElement("input");
   input.type = "text";
   input.placeholder = spec.placeholder;
   input.autocomplete = "off";
   const submit = document.createElement("button");
   submit.type = "submit";
-  if (row.name === "chat") {
-    submit.textContent = "Olhar";
-    submit.dataset.peek = "1";
-    add.append(input, submit);
-    const peek = document.createElement("div");
-    peek.className = "watch-peek";
-    peek.hidden = true;
-    input.addEventListener("input", () => {
-      if (chatPeek && input.value.trim() !== chatPeek.raw) {
-        chatPeek = null;
-        paintChatPeek(wrap);
-      }
-    });
-    wrap.addEventListener("submit", (event) => {
-      event.preventDefault();
-      lookAtChat(input.value);
-    });
-    wrap.append(label, chips, add, peek);
-    paintChatPeek(wrap);
-    return wrap;
-  }
-  submit.textContent = "Adicionar";
+  submit.textContent = "Olhar";
+  submit.dataset.peek = "1";
   add.append(input, submit);
+  const peek = document.createElement("div");
+  peek.className = "watch-peek";
+  peek.hidden = true;
+  input.addEventListener("input", () => {
+    if (sourcePeek && sourcePeek.source === row.name && input.value.trim() !== sourcePeek.raw) {
+      sourcePeek = null;
+      paintAllPeeks();
+    }
+  });
   wrap.addEventListener("submit", (event) => {
     event.preventDefault();
-    const value = input.value.trim();
-    if (!value) return;
-    saveWatches(row.name, items.concat({ id: value }));
+    lookAtWatch(row.name, input.value);
   });
-  wrap.append(label, chips, add);
+  wrap.append(label, chips, add, peek);
+  paintWatchPeek(wrap);
   return wrap;
 }
 
-function paintChatPeek(wrap) {
+function paintAllPeeks() {
+  document.querySelectorAll(".admin-watch").forEach((node) => paintWatchPeek(node));
+}
+
+function paintWatchPeek(wrap) {
   const panel = wrap.querySelector(".watch-peek");
   const input = wrap.querySelector(".watch-add input");
   const look = wrap.querySelector("[data-peek]");
+  const source = wrap.dataset.source;
+  const spec = WATCH_UI[source] || {};
+  const peek = sourcePeek && sourcePeek.source === source ? sourcePeek : null;
   if (!panel) return;
-  if (chatPeek?.raw && input && input.value.trim() === "") {
-    input.value = chatPeek.raw;
+  if (peek?.raw && input && input.value.trim() === "") {
+    input.value = peek.raw;
   }
-  if (look) look.disabled = Boolean(chatPeek?.loading);
-  if (!chatPeek) {
+  if (look) look.disabled = Boolean(peek?.loading);
+  if (!peek) {
     panel.hidden = true;
     panel.replaceChildren();
     return;
@@ -1280,26 +1371,27 @@ function paintChatPeek(wrap) {
   panel.replaceChildren();
   const head = document.createElement("p");
   head.className = "search-label";
-  if (chatPeek.loading) head.textContent = "olhando o canal…";
-  else if (chatPeek.title && chatPeek.title !== chatPeek.id) {
-    head.textContent = `${chatPeek.title} · ${chatPeek.id}`;
+  if (peek.loading) head.textContent = spec.looking || "olhando…";
+  else if (peek.title && peek.title !== peek.id) {
+    head.textContent = `${peek.title} · ${peek.id}`;
   } else {
-    head.textContent = chatPeek.id ? `canal ${chatPeek.id}` : "canal";
+    head.textContent = peek.id ? `${watchNoun(peek)} ${peek.id}` : spec.noun || "alvo";
   }
   panel.appendChild(head);
-  if (chatPeek.error) {
+  if (peek.error) {
     const note = document.createElement("p");
     note.className = "status";
-    note.textContent = chatPeek.error;
+    note.textContent = peek.error;
     panel.appendChild(note);
   }
-  if (chatPeek.messages?.length) {
+  const preview = peek.items || peek.messages || [];
+  if (preview.length) {
     const list = document.createElement("ol");
     list.className = "watch-preview";
-    for (const message of chatPeek.messages) {
+    for (const message of preview) {
       const item = document.createElement("li");
       const who = document.createElement("b");
-      who.textContent = message.author || "msg";
+      who.textContent = message.author || spec.noun || "item";
       const body = document.createElement("span");
       body.textContent = message.text;
       item.append(who, body);
@@ -1307,75 +1399,100 @@ function paintChatPeek(wrap) {
     }
     panel.appendChild(list);
   }
-  if (!chatPeek.loading && chatPeek.id) {
+  if (!peek.loading && peek.id) {
+    const presets = document.createElement("div");
+    presets.className = "watch-presets";
     const confirm = document.createElement("div");
     confirm.className = "watch-confirm";
-    const select = document.createElement("select");
-    select.setAttribute("aria-label", "Quanto tempo para trás");
-    for (const option of CHANNEL_RANGES) {
-      const node = document.createElement("option");
-      node.value = String(option.days);
-      node.textContent = option.label;
-      if (option.days === (chatPeek.days ?? 90)) node.selected = true;
-      select.appendChild(node);
-    }
-    select.addEventListener("change", () => {
-      chatPeek.days = Number(select.value);
+    const cutoff = document.createElement("input");
+    cutoff.type = "date";
+    cutoff.value = peek.cutoff || defaultCutoff();
+    cutoff.min = "1970-01-01";
+    cutoff.max = todayISO();
+    cutoff.setAttribute("aria-label", "Primeiro corte");
+    const setCutoff = (value) => {
+      cutoff.value = value;
+      peek.cutoff = value;
+    };
+    cutoff.addEventListener("change", () => {
+      peek.cutoff = cutoff.value;
     });
+    for (const option of CHANNEL_RANGES) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = option.label;
+      btn.addEventListener("click", () => setCutoff(daysAgoISO(option.days)));
+      presets.appendChild(btn);
+    }
     const add = document.createElement("button");
     add.type = "button";
     add.textContent = "Adicionar";
     add.addEventListener("click", () => {
       const items = asTargets(
-        adminConnectorRows.find((row) => row.name === "chat") || { watching: [] },
+        adminConnectorRows.find((row) => row.name === source) || { watching: [] },
       );
-      saveWatches("chat", items.concat({
-        id: chatPeek.id,
-        backfill_days: Number(select.value),
-      }));
+      const stamp = cutoff.value || defaultCutoff();
+      saveWatches(source, items.concat({ id: peek.id, cutoff: stamp }));
     });
-    confirm.append(select, add);
-    panel.appendChild(confirm);
+    confirm.append(cutoff, add);
+    panel.append(presets, confirm);
   }
 }
 
-async function lookAtChat(raw) {
+async function lookAtWatch(name, raw) {
   const value = String(raw || "").trim();
   if (!value) return;
-  chatPeek = { raw: value, loading: true, id: null, title: null, messages: [], error: null, days: 90 };
-  const wrap = document.querySelector('.admin-watch[data-source="chat"]');
-  if (wrap) paintChatPeek(wrap);
+  const spec = WATCH_UI[name] || {};
+  sourcePeek = {
+    source: name,
+    raw: value,
+    loading: true,
+    id: null,
+    title: null,
+    kind: null,
+    items: [],
+    error: null,
+    cutoff: defaultCutoff(),
+  };
+  paintAllPeeks();
   try {
     const res = await fetch("/api/admin/peek", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "chat", ref: value }),
+      body: JSON.stringify({ name, ref: value }),
     });
     const data = await res.json();
-    if (!chatPeek || chatPeek.raw !== value) return;
-    chatPeek = {
+    if (!sourcePeek || sourcePeek.source !== name || sourcePeek.raw !== value) return;
+    sourcePeek = {
+      source: name,
       raw: value,
       loading: false,
       id: data.id || null,
       title: data.title || data.id || null,
-      messages: data.messages || [],
-      error: data.error || (!res.ok ? "não deu para olhar o canal" : null),
-      days: 90,
+      kind: data.kind || null,
+      items: data.items || data.messages || [],
+      error: data.error || (!res.ok ? spec.fail || "não deu para olhar" : null),
+      cutoff: sourcePeek.cutoff || defaultCutoff(),
     };
   } catch {
-    if (!chatPeek || chatPeek.raw !== value) return;
-    chatPeek = {
+    if (!sourcePeek || sourcePeek.source !== name || sourcePeek.raw !== value) return;
+    sourcePeek = {
+      source: name,
       raw: value,
       loading: false,
       id: null,
       title: null,
-      messages: [],
-      error: "não deu para olhar o canal",
-      days: 90,
+      kind: null,
+      items: [],
+      error: spec.fail || "não deu para olhar",
+      cutoff: defaultCutoff(),
     };
   }
-  const next = document.querySelector('.admin-watch[data-source="chat"]');
-  if (next) paintChatPeek(next);
+  paintAllPeeks();
+}
+
+function lookAtChat(raw) {
+  return lookAtWatch("chat", raw);
 }
 
 function recentDrawerState(name) {
@@ -1531,6 +1648,7 @@ function renderAdmin(data, { forceConnectors = false } = {}) {
   }
   lastJobStatus = jobStatus;
   fillBackfillRange(data.backfill_days);
+  fillBackfillConnectors(data.connectors);
   adminJob.textContent = jobLine(data.job);
   renderQueue(data.job);
   adminIndex.textContent = indexLine(data.index);
@@ -1552,6 +1670,14 @@ function renderAdmin(data, { forceConnectors = false } = {}) {
   const running = data.job?.status === "running";
   const ready = (data.connectors || []).filter((row) => row.can_sync);
   if (startBackfill) startBackfill.disabled = running || !ready.length;
+  if (adminBackfillDays) adminBackfillDays.disabled = running;
+  if (adminBackfillConnectors) {
+    for (const input of adminBackfillConnectors.querySelectorAll(
+      'input[name="backfill-connector"]',
+    )) {
+      input.disabled = running || input.dataset.ready !== "1";
+    }
+  }
   const focused = document.activeElement;
   const typing = Boolean(focused && focused.closest(".admin-watch"));
   if (!typing || forceConnectors) {
@@ -1573,7 +1699,12 @@ async function refreshAdmin() {
 }
 
 async function requestSync(name, extra = {}) {
-  const body = { name, backfill: Boolean(extra.backfill) };
+  const body = { backfill: Boolean(extra.backfill) };
+  if (extra.names && extra.names.length) {
+    body.names = extra.names;
+  } else {
+    body.name = name;
+  }
   if (extra.backfill && extra.backfillDays != null) {
     body.backfill_days = extra.backfillDays;
   }
@@ -1590,6 +1721,18 @@ async function requestSync(name, extra = {}) {
   renderAdmin(data);
 }
 
+async function requestStop() {
+  if (stopSync) stopSync.disabled = true;
+  const res = await fetch("/api/admin/sync/stop", { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) {
+    adminJob.textContent = data.error || "não deu para parar";
+    if (stopSync) stopSync.disabled = false;
+    return;
+  }
+  renderAdmin(data);
+}
+
 async function saveWatches(name, items) {
   const res = await fetch("/api/admin/watches", {
     method: "POST",
@@ -1601,7 +1744,7 @@ async function saveWatches(name, items) {
     adminJob.textContent = data.error || "não deu para salvar";
     return;
   }
-  if (name === "chat") chatPeek = null;
+  if (sourcePeek?.source === name) sourcePeek = null;
   renderAdmin(data, { forceConnectors: true });
 }
 
@@ -1616,12 +1759,27 @@ function openAdmin() {
 document.getElementById("open-admin").addEventListener("click", openAdmin);
 document.getElementById("close-admin").addEventListener("click", closeAdmin);
 syncAll.addEventListener("click", () => requestSync("all"));
+if (stopSync) {
+  stopSync.addEventListener("click", requestStop);
+}
 if (adminBackfillForm) {
   fillBackfillRange();
   adminBackfillForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const days = Number(adminBackfillDays.value);
-    requestSync("all", { backfill: true, backfillDays: Number.isNaN(days) ? 365 : days });
+    const boxes = [
+      ...adminBackfillForm.querySelectorAll('input[name="backfill-connector"]'),
+    ];
+    const selected = boxes.filter((node) => node.checked).map((node) => node.value);
+    if (boxes.length && !selected.length) {
+      adminJob.textContent = "escolhe pelo menos um conector";
+      return;
+    }
+    requestSync(selected.length === 1 ? selected[0] : "all", {
+      backfill: true,
+      backfillDays: Number.isNaN(days) ? 365 : days,
+      names: selected,
+    });
   });
 }
 

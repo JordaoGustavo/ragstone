@@ -183,7 +183,20 @@ def test_chat_backfill_follows_history_cursor() -> None:
 
 
 def test_iso_days_ago_zero_is_epoch() -> None:
+    from ragtone.ingest.parse import unix_from_iso_date, window_stamp
+
     assert iso_days_ago(0) == "1970-01-01"
+    assert unix_from_iso_date("1970-01-01") == "0"
+    assert (
+        window_stamp(
+            keyed=None,
+            cutoff="2026-01-15",
+            backfill=False,
+            backfill_days=None,
+            default_days=365,
+        )
+        == "2026-01-15"
+    )
 
 
 def test_jira_backfill_uses_explicit_days() -> None:

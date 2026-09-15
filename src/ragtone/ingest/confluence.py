@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import confluence_chunks
 from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import confluence_next, search_page
-from ragtone.ingest.parse import as_text, iso_days_ago, later_watermark
+from ragtone.ingest.parse import as_text, later_watermark, window_stamp
 from ragtone.settings import ConfluenceSource, Settings
 
 
@@ -37,12 +38,32 @@ class ConfluenceConnector:
         cloud_id: str,
         backfill_days: int,
         pause: float,
+        checkpoints: CheckpointStore | None = None,
     ) -> None:
         self.source = source
         self.caller = caller
         self.cloud_id = cloud_id
         self.backfill_days = backfill_days
         self.pause = pause
+        self.checkpoints = checkpoints
+
+    def _stamp(
+        self,
+        doc: str,
+        checkpoint: str | None,
+        *,
+        backfill: bool,
+        backfill_days: int | None,
+    ) -> str:
+        keyed = self.checkpoints.get(f"confluence:{doc}") if self.checkpoints is not None else None
+        return window_stamp(
+            keyed=keyed,
+            legacy=checkpoint,
+            cutoff=self.source.doc_cutoffs.get(doc),
+            backfill=backfill,
+            backfill_days=backfill_days,
+            default_days=self.backfill_days,
+        )
 
     async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
         return await fetch_all(self, checkpoint, backfill=backfill)
@@ -55,11 +76,17 @@ class ConfluenceConnector:
         cursor: dict[str, Any] | None,
         backfill_days: int | None = None,
     ) -> Page:
-        if not self.source.docs:
+        docs = self.source.docs
+        if not docs:
             return Page(done=True)
-        days = self.backfill_days if backfill_days is None else backfill_days
-        stamp = checkpoint if checkpoint and not backfill else iso_days_ago(days)
-        cql = scoped_cql(self.source.docs, self.source.cql, stamp)
+        state = dict(cursor or {"i": 0})
+        index = int(state.get("i") or 0)
+        if index >= len(docs):
+            return Page(done=True)
+        doc = docs[index]
+        stamp = self._stamp(doc, checkpoint, backfill=backfill, backfill_days=backfill_days)
+        extra = state.get("s") if isinstance(state.get("s"), dict) else None
+        cql = scoped_cql([doc], self.source.cql, stamp)
         page = await search_page(
             self.caller,
             self.source.search_tool,
@@ -68,10 +95,11 @@ class ConfluenceConnector:
             "pages",
             "values",
             next_args=confluence_next,
-            extra=cursor,
+            extra=extra,
         )
         if self.pause:
             await asyncio.sleep(self.pause)
+        key = f"confluence:{doc}"
         records: list[WorkRecord] = []
         for page_doc in page.records:
             page_id = str(page_doc.get("id") or page_doc.get("contentId") or "")
@@ -83,14 +111,23 @@ class ConfluenceConnector:
                     ref=page_id,
                     payload=page_doc,
                     watermark=updated or None,
-                    checkpoint_key="confluence",
+                    checkpoint_key=key,
                 )
             )
+        if page.next_args:
+            return Page(
+                records=records,
+                cursor={"i": index, "s": page.next_args},
+                total=page.total,
+                done=False,
+            )
+        next_index = index + 1
+        done = next_index >= len(docs)
         return Page(
             records=records,
-            cursor=page.next_args,
+            cursor=None if done else {"i": next_index},
             total=page.total,
-            done=not page.next_args,
+            done=done,
         )
 
     async def materialize(self, record: WorkRecord) -> FetchResult:
@@ -122,15 +159,18 @@ class ConfluenceConnector:
         newest = later_watermark(record.watermark, updated)
         if self.pause:
             await asyncio.sleep(self.pause)
+        mark_key = record.checkpoint_key or "confluence"
         return FetchResult(
             chunks=chunks,
             watermark=newest,
-            watermarks={"confluence": newest} if newest else {},
+            watermarks={mark_key: newest} if newest else {},
         )
 
 
 def build_confluence(
-    settings: Settings, callers: dict[str, ToolCaller]
+    settings: Settings,
+    callers: dict[str, ToolCaller],
+    checkpoints: CheckpointStore | None = None,
 ) -> ConfluenceConnector | None:
     if not settings.confluence.enabled:
         return None
@@ -140,4 +180,5 @@ def build_confluence(
         cloud_id=settings.atlassian_cloud_id,
         backfill_days=settings.backfill_days,
         pause=settings.mcp_pause_seconds,
+        checkpoints=checkpoints,
     )

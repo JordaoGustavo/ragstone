@@ -9,7 +9,7 @@ from ragtone.board_http import create_app
 from ragtone.ingest.confluence import ConfluenceConnector, scoped_cql
 from ragtone.ingest.jira import JiraConnector, scoped_jql
 from ragtone.settings import ChatSource, ConfluenceSource, FoundationMcp, JiraSource, Settings
-from ragtone.watches import WatchStore, clean_watch_item, overlay_settings, parse_items
+from ragtone.watches import WatchStore, clean_watch_item, overlay_settings, parse_cutoff, parse_items
 
 
 class _BoomCaller:
@@ -299,3 +299,252 @@ def test_chat_everything_window_uses_oldest_zero() -> None:
     )
     asyncio.run(connector.fetch(None, backfill=False))
     assert caller.calls[0][1]["oldest"] == "0"
+
+
+def test_parse_cutoff_accepts_iso_date() -> None:
+    assert parse_cutoff("2026-01-15") == "2026-01-15"
+    assert parse_cutoff("2026-01-15T12:00:00Z") == "2026-01-15"
+    assert parse_cutoff("") is None
+    try:
+        parse_cutoff("15/01/2026")
+    except ValueError as exc:
+        assert "cutoff" in str(exc)
+    else:
+        raise AssertionError("expected invalid cutoff")
+
+
+def test_resolve_jira_and_confluence_links() -> None:
+    from ragtone.watch_preview import resolve_confluence_ref, resolve_jira_ref
+
+    assert resolve_jira_ref("https://stone.atlassian.net/browse/PAY-12") == "PAY"
+    assert (
+        resolve_jira_ref("https://stone.atlassian.net/jira/software/c/projects/PAY/boards/9")
+        == "PAY"
+    )
+    assert resolve_jira_ref("PAY-99") == "PAY"
+    assert resolve_jira_ref("abc") == "ABC"
+    assert resolve_jira_ref("???") is None
+    assert (
+        resolve_confluence_ref(
+            "https://stone.atlassian.net/wiki/spaces/ENG/pages/123456/SSO+runbook"
+        )
+        == "123456"
+    )
+    assert resolve_confluence_ref("https://stone.atlassian.net/wiki/spaces/ENG") == "ENG"
+    assert resolve_confluence_ref("viewpage.action?pageId=42") == "42"
+
+
+def test_peek_jira_lists_recent_issues() -> None:
+    from ragtone.watch_preview import peek_jira
+
+    class Caller:
+        async def call_tool(self, name: str, args: dict) -> dict:
+            assert name == "jira_search"
+            assert "project = PAY" in args["jql"]
+            return {
+                "issues": [
+                    {
+                        "key": "PAY-1",
+                        "fields": {
+                            "summary": "login caiu",
+                            "updated": "2026-09-01",
+                            "project": {"name": "Pagamentos", "key": "PAY"},
+                        },
+                    }
+                ]
+            }
+
+    data = asyncio.run(
+        peek_jira(Settings(jira={"mcp": "atlassian"}), "PAY-1", caller=Caller())
+    )
+    assert data["ok"] is True
+    assert data["id"] == "PAY"
+    assert data["title"] == "Pagamentos"
+    assert data["kind"] == "project"
+    assert data["items"][0]["text"] == "login caiu"
+    assert data["items"][0]["author"] == "PAY-1"
+
+
+def test_peek_confluence_page_and_space() -> None:
+    from ragtone.watch_preview import peek_confluence
+
+    class PageCaller:
+        async def call_tool(self, name: str, args: dict) -> dict:
+            assert name == "confluence_get_page"
+            assert args["pageId"] == "123456"
+            return {
+                "id": "123456",
+                "title": "SSO runbook",
+                "body": "como resetar o sso",
+                "lastModified": "2026-09-01",
+            }
+
+    page = asyncio.run(
+        peek_confluence(Settings(confluence={"mcp": "atlassian"}), "123456", caller=PageCaller())
+    )
+    assert page["ok"] is True
+    assert page["kind"] == "page"
+    assert page["title"] == "SSO runbook"
+    assert "resetar" in page["items"][0]["text"]
+
+    class SpaceCaller:
+        async def call_tool(self, name: str, args: dict) -> dict:
+            assert name == "confluence_search"
+            assert "space = ENG" in args["cql"]
+            return {
+                "results": [
+                    {
+                        "id": "1",
+                        "title": "Intro",
+                        "excerpt": "bem-vindo ao espaço",
+                        "lastModified": "2026-09-01",
+                    }
+                ]
+            }
+
+    space = asyncio.run(
+        peek_confluence(Settings(confluence={"mcp": "atlassian"}), "ENG", caller=SpaceCaller())
+    )
+    assert space["kind"] == "space"
+    assert space["items"][0]["author"] == "Intro"
+
+
+def test_peek_endpoint_resolves_jira_link_without_mcp(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/admin/peek",
+        json={"name": "jira", "ref": "https://stone.atlassian.net/browse/PAY-12"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == "PAY"
+    assert data["ok"] is False
+    assert data["items"] == []
+    assert "MCP" in data["error"]
+
+
+def test_overlay_settings_keeps_cutoffs() -> None:
+    settings = Settings()
+    next_ = overlay_settings(
+        settings,
+        {
+            "jira": [{"id": "ABC", "cutoff": "2026-01-15"}],
+            "confluence": [{"id": "42", "cutoff": "2026-02-01"}],
+            "chat": [{"id": "eng", "cutoff": "2026-03-01"}],
+        },
+    )
+    assert next_.jira.project_cutoffs == {"ABC": "2026-01-15"}
+    assert next_.confluence.doc_cutoffs == {"42": "2026-02-01"}
+    assert next_.chat.channel_cutoffs == {"eng": "2026-03-01"}
+
+
+def test_board_http_saves_cutoff_for_jira(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    saved = client.post(
+        "/api/admin/watches",
+        json={"name": "jira", "items": [{"id": "abc", "cutoff": "2026-01-15"}]},
+    )
+    assert saved.status_code == 200
+    jira = next(row for row in saved.json()["connectors"] if row["name"] == "jira")
+    assert jira["targets"][0]["cutoff"] == "2026-01-15"
+    stored = (tmp_path / "watches.json").read_text()
+    assert "2026-01-15" in stored
+
+
+def test_board_http_rejects_invalid_cutoff(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/admin/watches",
+        json={"name": "chat", "items": [{"id": "eng", "cutoff": "ontem"}]},
+    )
+    assert response.status_code == 400
+
+
+def test_jira_uses_project_cutoff_until_checkpoint(tmp_path: Path) -> None:
+    from ragtone.checkpoints import CheckpointStore
+    from ragtone.ingest.jira import JiraConnector
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def call_tool(self, name: str, args: dict) -> dict:
+            self.calls.append((name, args))
+            return {"issues": [], "isLast": True}
+
+    caller = Recorder()
+    checkpoints = CheckpointStore(tmp_path / "checkpoints.json")
+    connector = JiraConnector(
+        JiraSource(
+            enabled=True,
+            projects=["ABC"],
+            project_cutoffs={"ABC": "2026-01-15"},
+        ),
+        caller,
+        cloud_id="https://example.atlassian.net",
+        backfill_days=365,
+        pause=0,
+        checkpoints=checkpoints,
+    )
+    asyncio.run(connector.fetch(None, backfill=False))
+    assert "2026-01-15" in caller.calls[0][1]["jql"]
+    checkpoints.set("jira:ABC", "2026-06-01")
+    asyncio.run(connector.fetch(None, backfill=False))
+    assert "2026-06-01" in caller.calls[-1][1]["jql"]
+    asyncio.run(connector.fetch(None, backfill=True))
+    assert "2026-01-15" in caller.calls[-1][1]["jql"]
+
+
+def test_chat_uses_cutoff_date() -> None:
+    from ragtone.ingest.chat import ChatConnector
+    from ragtone.ingest.parse import unix_from_iso_date
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def call_tool(self, name: str, args: dict) -> dict:
+            self.calls.append((name, args))
+            return {"messages": []}
+
+    caller = Recorder()
+    connector = ChatConnector(
+        ChatSource(enabled=True, channels=["eng"], channel_cutoffs={"eng": "2026-01-15"}),
+        caller,
+        pause=0,
+        default_days=365,
+    )
+    asyncio.run(connector.fetch(None, backfill=False))
+    assert caller.calls[0][1]["oldest"] == unix_from_iso_date("2026-01-15")
+
+
+def test_jira_projects_keep_separate_cutoffs() -> None:
+    from ragtone.ingest.jira import JiraConnector
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def call_tool(self, name: str, args: dict) -> dict:
+            self.calls.append((name, args))
+            return {"issues": [], "isLast": True}
+
+    caller = Recorder()
+    connector = JiraConnector(
+        JiraSource(
+            enabled=True,
+            projects=["ABC", "PLAT"],
+            project_cutoffs={"ABC": "2026-01-15", "PLAT": "2026-06-01"},
+        ),
+        caller,
+        cloud_id="https://example.atlassian.net",
+        backfill_days=365,
+        pause=0,
+    )
+    asyncio.run(connector.fetch(None, backfill=False))
+    jqls = [args["jql"] for name, args in caller.calls]
+    assert any("project in (ABC)" in item and "2026-01-15" in item for item in jqls)
+    assert any("project in (PLAT)" in item and "2026-06-01" in item for item in jqls)

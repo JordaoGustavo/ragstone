@@ -26,6 +26,7 @@ class JiraSource(BaseModel):
     get_tool: str = "jira_get_issue"
     jql: str = 'updated >= "{checkpoint}" ORDER BY updated ASC'
     projects: list[str] = Field(default_factory=list)
+    project_cutoffs: dict[str, str] = Field(default_factory=dict)
 
 
 class ConfluenceSource(BaseModel):
@@ -35,6 +36,7 @@ class ConfluenceSource(BaseModel):
     get_tool: str = "confluence_get_page"
     cql: str = 'lastModified >= "{checkpoint}"'
     docs: list[str] = Field(default_factory=list)
+    doc_cutoffs: dict[str, str] = Field(default_factory=dict)
 
 
 class ChatSource(BaseModel):
@@ -44,6 +46,7 @@ class ChatSource(BaseModel):
     replies_tool: str = "conversations_replies"
     channels: list[str] = Field(default_factory=list)
     channel_windows: dict[str, int] = Field(default_factory=dict)
+    channel_cutoffs: dict[str, str] = Field(default_factory=dict)
 
 
 class Settings(BaseSettings):

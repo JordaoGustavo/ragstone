@@ -109,6 +109,9 @@
           </header>
           <div class="admin-tools">
             <form id="admin-backfill-form" class="admin-backfill">
+              <fieldset id="admin-backfill-connectors" class="admin-backfill-connectors">
+                <legend class="search-label">Quais conectores</legend>
+              </fieldset>
               <label>
                 <span class="search-label">Quanto tempo para trás</span>
                 <select
@@ -116,7 +119,10 @@
                   aria-label="Quanto tempo para trás"
                 ></select>
               </label>
-              <button type="submit" id="start-backfill">Começar backfill</button>
+              <div class="admin-backfill-actions">
+                <button type="submit" id="start-backfill">Começar backfill</button>
+                <button type="button" id="stop-sync" hidden>Parar</button>
+              </div>
             </form>
             <button type="button" id="sync-all">Atualizar todos</button>
             <p id="admin-job"></p>

@@ -304,3 +304,150 @@ def test_board_http_retries_dlq(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert queue.get_item(item.id).status == "pending"
     assert response.json()["job"]["dlq"] == 0
+
+
+def test_queue_cancels_active_run_and_unfinished_items() -> None:
+    queue = JobQueue()
+    run = queue.create_run("jira", backfill=True)
+    queue.accept_page(
+        run.id,
+        Page(records=[WorkRecord(ref="ABC-1", payload={})], total=1, done=False),
+    )
+    cancelled = queue.cancel_run(run.id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.producer_done is True
+    assert queue.get_item(f"{run.id}:ABC-1").status == "cancelled"
+    assert queue.claim_item(["jira"]) is None
+    assert queue.active_for("jira") is False
+    job = queue.admin_job()
+    assert job["status"] == "cancelled"
+    assert job["backfill"] is True
+
+
+def test_succeed_does_not_revive_cancelled_run() -> None:
+    queue = JobQueue()
+    run = queue.create_run("jira", backfill=True)
+    queue.accept_page(
+        run.id,
+        Page(records=[WorkRecord(ref="ABC-1", payload={})], total=1, done=True),
+    )
+    item = queue.claim_item(["jira"])
+    assert item is not None
+    queue.cancel_run(run.id)
+    queue.succeed(item, chunks=2, watermark="2026-01-01")
+    finished = queue.get_run(run.id)
+    assert finished is not None
+    assert finished.status == "cancelled"
+    assert finished.indexed == 1
+    assert queue.get_item(item.id).status == "ok"
+
+
+class _HoldPage:
+    name = "jira"
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.pages = 0
+
+    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None) -> Page:
+        self.started.set()
+        await self.release.wait()
+        self.pages += 1
+        return Page(
+            records=[WorkRecord(ref="ABC-1", payload={}, watermark="2026-03-01")],
+            total=1,
+            done=True,
+        )
+
+    async def materialize(self, record: WorkRecord) -> FetchResult:
+        return FetchResult()
+
+
+def test_worker_drops_page_when_run_is_cancelled(tmp_path: Path) -> None:
+    connector = _HoldPage()
+    queue = JobQueue()
+    queue.create_run("jira", backfill=True)
+    worker = IngestWorker(
+        InMemoryIndex(),
+        HashEmbedder(8),
+        CheckpointStore(tmp_path / "checkpoints.json"),
+        [connector],
+        poll_seconds=1,
+        queue=queue,
+    )
+
+    async def scenario() -> None:
+        task = asyncio.create_task(worker.drain())
+        await connector.started.wait()
+        queue.cancel_active()
+        connector.release.set()
+        await task
+
+    asyncio.run(scenario())
+    run = queue.latest_run("jira")
+    assert run is not None
+    assert run.status == "cancelled"
+    assert run.discovered == 0
+    assert connector.pages == 1
+
+
+def _atlassian_settings(tmp_path: Path) -> Settings:
+    return Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        jira={"enabled": True, "mcp": "atlassian", "projects": ["ABC"]},
+        confluence={"enabled": True, "mcp": "atlassian", "docs": ["ENG"]},
+        foundation_mcps=[FoundationMcp(name="atlassian", url="http://127.0.0.1:3001/mcp")],
+    )
+
+
+def test_board_http_enqueues_backfill_for_selected_connectors(tmp_path: Path) -> None:
+    app = create_app(_atlassian_settings(tmp_path))
+    queue = JobQueue()
+    app.state.ctx._queue = queue
+    client = TestClient(app)
+    response = client.post(
+        "/api/admin/sync",
+        json={"names": ["confluence"], "backfill": True, "backfill_days": 90},
+    )
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["status"] == "running"
+    assert job["connector"] == "confluence"
+    assert job["backfill"] is True
+    assert job["backfill_days"] == 90
+    assert queue.latest_run("jira") is None
+    run = queue.latest_run("confluence")
+    assert run is not None
+    assert run.backfill is True
+    assert run.backfill_days == 90
+
+
+def test_board_http_rejects_empty_connector_list(tmp_path: Path) -> None:
+    client = TestClient(create_app(_atlassian_settings(tmp_path)))
+    response = client.post("/api/admin/sync", json={"names": [], "backfill": True})
+    assert response.status_code == 400
+    assert "conector" in response.json()["error"]
+
+
+def test_board_http_stops_running_backfill(tmp_path: Path) -> None:
+    app = create_app(_atlassian_settings(tmp_path))
+    queue = JobQueue()
+    run = queue.create_run("confluence", backfill=True, backfill_days=90)
+    queue.accept_page(
+        run.id,
+        Page(records=[WorkRecord(ref="page-1", payload={})], total=4, done=False),
+    )
+    app.state.ctx._queue = queue
+    client = TestClient(app)
+    response = client.post("/api/admin/sync/stop")
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["status"] == "cancelled"
+    assert job["connector"] == "confluence"
+    assert queue.get_run(run.id).status == "cancelled"
+    assert queue.get_item(f"{run.id}:page-1").status == "cancelled"
+    idle = client.post("/api/admin/sync/stop")
+    assert idle.status_code == 409
+    assert "curso" in idle.json()["error"]

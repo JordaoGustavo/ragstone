@@ -9,7 +9,7 @@ from ragtone.chunking import chat_chunk
 from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import chat_next, paged_records, search_page
-from ragtone.ingest.parse import as_text, later_watermark, unix_days_ago
+from ragtone.ingest.parse import as_text, later_watermark, window_stamp
 from ragtone.settings import ChatSource, Settings
 
 
@@ -90,14 +90,15 @@ class ChatConnector:
     def _oldest(self, channel: str, *, backfill: bool, backfill_days: int | None = None) -> str:
         key = f"chat:{channel}"
         saved = self.checkpoints.get(key) if self.checkpoints is not None else None
-        if backfill or not saved:
-            days = backfill_days
-            if days is None:
-                days = self.source.channel_windows.get(channel)
-            if days is None:
-                days = self.default_days
-            return unix_days_ago(days)
-        return saved
+        return window_stamp(
+            keyed=saved,
+            cutoff=self.source.channel_cutoffs.get(channel),
+            backfill=backfill,
+            backfill_days=backfill_days,
+            window_days=self.source.channel_windows.get(channel),
+            default_days=self.default_days,
+            as_unix=True,
+        )
 
     async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
         return await fetch_all(self, checkpoint, backfill=backfill)

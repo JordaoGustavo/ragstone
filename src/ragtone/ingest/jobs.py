@@ -8,6 +8,7 @@ from ragtone.ingest.parse import later_watermark
 
 UNFINISHED = ("pending", "retry", "running")
 ACTIVE = ("pending", "running")
+CANCELLED = "cancelled"
 MAX_ATTEMPTS = 3
 CLAIM_STALE = timedelta(seconds=120)
 LEASE_TTL = timedelta(seconds=60)
@@ -190,8 +191,12 @@ def job_view(
             "runs": [],
         }
     status = "running" if run.status in ACTIVE else run.status
-    if len(listed) > 1 and any(item.status in ACTIVE for item in listed):
-        status = "running"
+    if len(listed) > 1 and (
+        any(item.status in ACTIVE for item in listed)
+        or len({item.status for item in listed}) == 1
+    ):
+        if any(item.status in ACTIVE for item in listed):
+            status = "running"
         connector = "all" if len({item.connector for item in listed}) > 1 else run.connector
         chunks = sum(item.chunks for item in listed)
         discovered = sum(item.discovered for item in listed)

@@ -46,11 +46,46 @@ def iso_days_ago(days: int) -> str:
     return start.date().isoformat()
 
 
+def unix_from_iso_date(stamp: str) -> str:
+    day = stamp.strip()[:10]
+    if not day or day <= "1970-01-01":
+        return "0"
+    start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return f"{start.timestamp():.6f}"
+
+
 def unix_days_ago(days: int) -> str:
     if days <= 0:
         return "0"
     start = datetime.now(timezone.utc) - timedelta(days=days)
     return f"{start.timestamp():.6f}"
+
+
+def window_stamp(
+    *,
+    keyed: str | None,
+    legacy: str | None = None,
+    cutoff: str | None = None,
+    backfill: bool,
+    backfill_days: int | None,
+    default_days: int,
+    window_days: int | None = None,
+    as_unix: bool = False,
+) -> str:
+    saved = keyed or (None if cutoff else legacy)
+    if not backfill and saved:
+        return saved
+
+    def _days(days: int) -> str:
+        return unix_days_ago(days) if as_unix else iso_days_ago(days)
+
+    if backfill_days is not None:
+        return _days(backfill_days)
+    if cutoff:
+        return unix_from_iso_date(cutoff) if as_unix else cutoff
+    if window_days is not None:
+        return _days(window_days)
+    return _days(default_days)
 
 
 def later_watermark(*values: str | None) -> str | None:

@@ -12,7 +12,7 @@ from ragtone.ingest.chat import build_chat
 from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.confluence import build_confluence
 from ragtone.ingest.jira import build_jira
-from ragtone.ingest.jobs import MAX_ATTEMPTS
+from ragtone.ingest.jobs import ACTIVE, MAX_ATTEMPTS
 from ragtone.ingest.queue import JobQueue
 from ragtone.retrieval import ChunkStore
 from ragtone.settings import Settings
@@ -27,7 +27,7 @@ def build_connectors(
 ) -> list[Connector]:
     connectors: list[Connector] = []
     for builder in (build_jira, build_confluence):
-        connector = builder(settings, callers)
+        connector = builder(settings, callers, checkpoints)
         if connector is not None:
             connectors.append(connector)
     chat = build_chat(settings, callers, checkpoints)
@@ -96,7 +96,9 @@ class IngestWorker:
         names = self._names
         item = self.queue.claim_item(names)
         if item is not None:
-            await self._consume(item)
+            run = self.queue.get_run(item.run_id)
+            if run is not None and run.status in ACTIVE:
+                await self._consume(item)
             return True
         run = self.queue.next_to_produce(names)
         if run is not None:
@@ -151,6 +153,9 @@ class IngestWorker:
                 cursor=run.page_cursor,
                 backfill_days=run.backfill_days,
             )
+            current = self.queue.get_run(run.id)
+            if current is None or current.status not in ACTIVE:
+                return
             accepted = self.queue.accept_page(run.id, page)
             log.info(
                 "%s search page %s: +%s (discovered %s%s)",
@@ -165,6 +170,9 @@ class IngestWorker:
             self.queue.fail_run(run.id, str(exc))
 
     async def _consume(self, item) -> None:
+        run = self.queue.get_run(item.run_id)
+        if run is None or run.status not in ACTIVE:
+            return
         try:
             connector = self._connector(item.connector)
             result = await connector.materialize(

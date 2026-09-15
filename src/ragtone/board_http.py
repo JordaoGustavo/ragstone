@@ -34,8 +34,8 @@ from ragtone.ingest.queue import JobQueue
 from ragtone.ingest.run import IngestConfigError, with_worker
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
-from ragtone.channel_preview import peek_chat
-from ragtone.watches import WatchStore, parse_backfill_days, parse_targets
+from ragtone.watch_preview import peek_source
+from ragtone.watches import SOURCES, WatchStore, parse_backfill_days, parse_targets
 
 log = logging.getLogger(__name__)
 WEB = Path(__file__).parent / "web" / "board"
@@ -337,6 +337,28 @@ async def expand(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "items": items})
 
 
+def _requested_names(body: dict) -> tuple[list[str] | None, JSONResponse | None]:
+    raw = body.get("names")
+    if isinstance(raw, list):
+        names: list[str] = []
+        for item in raw:
+            name = str(item).strip()
+            if name not in {"jira", "confluence", "chat"}:
+                return None, JSONResponse({"error": "conector desconhecido"}, status_code=400)
+            if name not in names:
+                names.append(name)
+        if not names:
+            return None, JSONResponse(
+                {"error": "escolhe pelo menos um conector"},
+                status_code=400,
+            )
+        return names, None
+    name = str(body.get("name") or body.get("connector") or "").strip()
+    if name not in {"jira", "confluence", "chat", "all"}:
+        return None, JSONResponse({"error": "conector desconhecido"}, status_code=400)
+    return [name], None
+
+
 def _sync_names(ctx: BoardContext, name: str) -> tuple[list[str] | None, JSONResponse | None]:
     payload = ctx.admin_snapshot()
     rows = {row["name"]: row for row in payload["connectors"]}
@@ -382,6 +404,9 @@ async def _run_sync(ctx: BoardContext, names: list[str]) -> None:
     try:
         await with_worker(ctx.settings, lambda worker: worker.drain(), names=names, queue=queue)
         ctx.job = queue.admin_job()
+    except asyncio.CancelledError:
+        ctx.job = queue.admin_job()
+        raise
     except IngestConfigError as exc:
         ctx.job = {**queue.admin_job(), "status": "error", "error": str(exc)}
     except Exception as exc:
@@ -399,7 +424,6 @@ async def get_admin(request: Request) -> JSONResponse:
 async def start_sync(request: Request) -> JSONResponse:
     ctx = _ctx(request)
     body = await request.json()
-    name = str(body.get("name") or body.get("connector") or "").strip()
     backfill = bool(body.get("backfill"))
     days = None
     if "backfill_days" in body:
@@ -408,12 +432,19 @@ async def start_sync(request: Request) -> JSONResponse:
             days = parse_backfill_days(body.get("backfill_days"))
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-    if name not in {"jira", "confluence", "chat", "all"}:
-        return JSONResponse({"error": "conector desconhecido"}, status_code=400)
-    names, error = _sync_names(ctx, name)
+    requested, error = _requested_names(body)
     if error is not None:
         return error
-    assert names is not None
+    assert requested is not None
+    names: list[str] = []
+    for name in requested:
+        resolved, error = _sync_names(ctx, name)
+        if error is not None:
+            return error
+        assert resolved is not None
+        for item in resolved:
+            if item not in names:
+                names.append(item)
     if ctx.job.get("status") == "running":
         return JSONResponse({"error": "já tem uma atualização em curso"}, status_code=409)
     queue = ctx.jobs()
@@ -427,6 +458,25 @@ async def start_sync(request: Request) -> JSONResponse:
     ctx.job = queue.admin_job()
     if ctx.live_index() is not None:
         ctx._sync_task = asyncio.create_task(_run_sync(ctx, names))
+    return JSONResponse(ctx.admin_snapshot())
+
+
+async def stop_sync(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    queue = ctx.jobs()
+    cancelled: list = []
+    if queue is not None:
+        cancelled = queue.cancel_active()
+    task = ctx._sync_task
+    running_task = task is not None and not task.done()
+    if running_task:
+        task.cancel()
+    if not cancelled and not running_task and ctx.job.get("status") != "running":
+        return JSONResponse({"error": "nada em curso"}, status_code=409)
+    if queue is not None:
+        ctx.job = queue.admin_job()
+    elif ctx.job.get("status") == "running":
+        ctx.job = {**ctx.job, "status": "cancelled"}
     return JSONResponse(ctx.admin_snapshot())
 
 
@@ -480,11 +530,11 @@ async def peek_watch(request: Request) -> JSONResponse:
     body = await request.json()
     name = str(body.get("name") or "").strip()
     raw = str(body.get("ref") or body.get("value") or "")
-    if name != "chat":
-        return JSONResponse({"error": "só chat olha o canal pelo link"}, status_code=400)
+    if name not in SOURCES:
+        return JSONResponse({"error": "conector desconhecido"}, status_code=400)
     if len(raw) > 2000:
         return JSONResponse({"error": "texto grande demais"}, status_code=400)
-    data = await peek_chat(ctx.settings, raw)
+    data = await peek_source(ctx.settings, name, raw)
     if not data.get("id"):
         return JSONResponse(data, status_code=400)
     return JSONResponse(data)
@@ -512,6 +562,7 @@ def create_app(
         Route("/api/expand", expand, methods=["GET"]),
         Route("/api/admin", get_admin, methods=["GET"]),
         Route("/api/admin/sync", start_sync, methods=["POST"]),
+        Route("/api/admin/sync/stop", stop_sync, methods=["POST"]),
         Route("/api/admin/dlq/retry", retry_dlq, methods=["POST"]),
         Route("/api/admin/watches", save_watches, methods=["POST"]),
         Route("/api/admin/peek", peek_watch, methods=["POST"]),

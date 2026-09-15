@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import jira_chunks
 from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import jira_next, search_page
-from ragtone.ingest.parse import as_records, as_text, iso_days_ago, later_watermark
+from ragtone.ingest.parse import as_records, as_text, later_watermark, window_stamp
 from ragtone.settings import JiraSource, Settings
 
 
@@ -36,12 +37,32 @@ class JiraConnector:
         cloud_id: str,
         backfill_days: int,
         pause: float,
+        checkpoints: CheckpointStore | None = None,
     ) -> None:
         self.source = source
         self.caller = caller
         self.cloud_id = cloud_id
         self.backfill_days = backfill_days
         self.pause = pause
+        self.checkpoints = checkpoints
+
+    def _stamp(
+        self,
+        project: str,
+        checkpoint: str | None,
+        *,
+        backfill: bool,
+        backfill_days: int | None,
+    ) -> str:
+        keyed = self.checkpoints.get(f"jira:{project}") if self.checkpoints is not None else None
+        return window_stamp(
+            keyed=keyed,
+            legacy=checkpoint,
+            cutoff=self.source.project_cutoffs.get(project),
+            backfill=backfill,
+            backfill_days=backfill_days,
+            default_days=self.backfill_days,
+        )
 
     async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
         return await fetch_all(self, checkpoint, backfill=backfill)
@@ -54,11 +75,17 @@ class JiraConnector:
         cursor: dict[str, Any] | None,
         backfill_days: int | None = None,
     ) -> Page:
-        if not self.source.projects:
+        projects = self.source.projects
+        if not projects:
             return Page(done=True)
-        days = self.backfill_days if backfill_days is None else backfill_days
-        stamp = checkpoint if checkpoint and not backfill else iso_days_ago(days)
-        jql = scoped_jql(self.source.projects, self.source.jql, stamp)
+        state = dict(cursor or {"i": 0})
+        index = int(state.get("i") or 0)
+        if index >= len(projects):
+            return Page(done=True)
+        project = projects[index]
+        stamp = self._stamp(project, checkpoint, backfill=backfill, backfill_days=backfill_days)
+        extra = state.get("s") if isinstance(state.get("s"), dict) else None
+        jql = scoped_jql([project], self.source.jql, stamp)
         page = await search_page(
             self.caller,
             self.source.search_tool,
@@ -67,25 +94,40 @@ class JiraConnector:
             "results",
             "values",
             next_args=jira_next,
-            extra=cursor,
+            extra=extra,
         )
         if self.pause:
             await asyncio.sleep(self.pause)
+        key = f"jira:{project}"
         records: list[WorkRecord] = []
         for issue in page.records:
-            key = str(issue.get("key") or issue.get("id") or "")
-            if not key:
+            issue_key = str(issue.get("key") or issue.get("id") or "")
+            if not issue_key:
                 continue
             fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else issue
             updated = str(fields.get("updated") or issue.get("updated") or "")
             records.append(
-                WorkRecord(ref=key, payload=issue, watermark=updated or None, checkpoint_key="jira")
+                WorkRecord(
+                    ref=issue_key,
+                    payload=issue,
+                    watermark=updated or None,
+                    checkpoint_key=key,
+                )
             )
+        if page.next_args:
+            return Page(
+                records=records,
+                cursor={"i": index, "s": page.next_args},
+                total=page.total,
+                done=False,
+            )
+        next_index = index + 1
+        done = next_index >= len(projects)
         return Page(
             records=records,
-            cursor=page.next_args,
+            cursor=None if done else {"i": next_index},
             total=page.total,
-            done=not page.next_args,
+            done=done,
         )
 
     async def materialize(self, record: WorkRecord) -> FetchResult:
@@ -146,14 +188,19 @@ class JiraConnector:
         newest = later_watermark(record.watermark, updated)
         if self.pause:
             await asyncio.sleep(self.pause)
+        mark_key = record.checkpoint_key or "jira"
         return FetchResult(
             chunks=chunks,
             watermark=newest,
-            watermarks={"jira": newest} if newest else {},
+            watermarks={mark_key: newest} if newest else {},
         )
 
 
-def build_jira(settings: Settings, callers: dict[str, ToolCaller]) -> JiraConnector | None:
+def build_jira(
+    settings: Settings,
+    callers: dict[str, ToolCaller],
+    checkpoints: CheckpointStore | None = None,
+) -> JiraConnector | None:
     if not settings.jira.enabled:
         return None
     return JiraConnector(
@@ -162,4 +209,5 @@ def build_jira(settings: Settings, callers: dict[str, ToolCaller]) -> JiraConnec
         cloud_id=settings.atlassian_cloud_id,
         backfill_days=settings.backfill_days,
         pause=settings.mcp_pause_seconds,
+        checkpoints=checkpoints,
     )

@@ -937,6 +937,7 @@ body.admin-open .rail-peek {
   gap: 10px 12px;
   color: #5c5348;
   font-size: 14px;
+  flex: 1 1 100%;
 }
 
 .admin-backfill label {
@@ -947,6 +948,47 @@ body.admin-open .rail-peek {
 .admin-backfill .search-label {
   margin: 0;
   color: #8a7d6c;
+}
+
+.admin-backfill-connectors {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.admin-backfill-connectors legend {
+  padding: 0;
+  margin: 0 0 6px;
+  width: 100%;
+}
+
+.admin-backfill-connectors label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 13px "Atkinson Hyperlegible", sans-serif;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.admin-backfill-connectors label.is-off {
+  color: #8a7d6c;
+  cursor: not-allowed;
+}
+
+.admin-backfill-connectors input {
+  accent-color: var(--copper);
+}
+
+.admin-backfill-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .admin-backfill select {
@@ -1147,11 +1189,22 @@ body.admin-open .rail-peek {
   cursor: pointer;
 }
 
+#stop-sync {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid #b85c38;
+  padding: 8px 12px;
+  font: 700 13px "Atkinson Hyperlegible", sans-serif;
+  cursor: pointer;
+}
+
 #start-backfill:disabled,
 #sync-all:disabled,
-.admin-run:disabled {
+.admin-run:disabled,
+#stop-sync:disabled {
   background: #d9cfc0;
   color: #8a7d6c;
+  border-color: #d9cfc0;
   cursor: not-allowed;
 }
 
@@ -1200,7 +1253,8 @@ body.admin-open .rail-peek {
 
 .watch-add input,
 .watch-add select,
-.watch-confirm select {
+.watch-confirm select,
+.watch-confirm input[type="date"] {
   background: #fff;
   color: var(--ink);
   border: 1px solid #d9cfc0;
@@ -1210,7 +1264,8 @@ body.admin-open .rail-peek {
 
 .watch-add input:focus,
 .watch-add select:focus,
-.watch-confirm select:focus {
+.watch-confirm select:focus,
+.watch-confirm input[type="date"]:focus {
   outline: 1px solid var(--copper);
 }
 
@@ -1254,6 +1309,28 @@ body.admin-open .rail-peek {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #8a7d6c;
+}
+
+.watch-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.watch-presets button {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid #d9cfc0;
+  padding: 4px 8px;
+  font: 600 11px "IBM Plex Mono", monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.watch-presets button:hover {
+  border-color: var(--copper);
+  color: var(--copper);
 }
 
 .watch-confirm {
