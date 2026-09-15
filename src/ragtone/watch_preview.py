@@ -170,7 +170,7 @@ async def _with_caller(
     if caller is not None:
         return await run(caller)
     spec = settings.mcp_by_name(mcp_name)
-    async with FoundationClient(spec) as client:
+    async with FoundationClient(spec, settings.data_dir) as client:
         return await run(client)
 
 
