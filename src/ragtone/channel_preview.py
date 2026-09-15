@@ -145,7 +145,7 @@ async def peek_chat(
         if caller is not None:
             return await _run(caller)
         spec = settings.mcp_by_name(settings.chat.mcp)
-        async with FoundationClient(spec) as client:
+        async with FoundationClient(spec, settings.data_dir) as client:
             return await _run(client)
     except Exception as exc:
         return {**empty, "error": str(exc) or "não deu para olhar o canal"}
