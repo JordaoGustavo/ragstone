@@ -153,6 +153,31 @@ def test_confluence_backfill_follows_cursor_past_limit_25() -> None:
     assert search_calls[1].get("cursor") == "next-page"
 
 
+def test_confluence_extracts_id_from_nested_content_envelope() -> None:
+    payload = {
+        "results": [
+            {
+                "content": {"id": "6144266448", "type": "page"},
+                "title": "Data Access Layer",
+                "excerpt": "",
+                "lastModified": "2026-07-13T19:58:15.000Z",
+            }
+        ],
+        "totalSize": 1,
+    }
+    caller = _Pager(search=[payload])
+    connector = ConfluenceConnector(
+        ConfluenceSource(enabled=True, docs=["6144266448"]),
+        caller,
+        cloud_id="https://example.atlassian.net",
+        backfill_days=30,
+        pause=0,
+    )
+    result = asyncio.run(connector.fetch(None, backfill=True))
+    pages = {chunk.parent_id for chunk in result.chunks}
+    assert pages == {"6144266448"}
+
+
 def test_chat_backfill_follows_history_cursor() -> None:
     first = {
         "messages": [

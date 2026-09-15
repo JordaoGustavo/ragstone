@@ -166,11 +166,7 @@ class ElasticsearchBackend:
         from elasticsearch import NotFoundError
 
         try:
-            hit = self.es.get(
-                index=self.items_index,
-                id=item_id,
-                seq_no_primary_term=True,
-            )
+            hit = self.es.get(index=self.items_index, id=item_id)
         except NotFoundError:
             return None
         item = item_from_doc(hit.get("_source") or {}, item_id=item_id)

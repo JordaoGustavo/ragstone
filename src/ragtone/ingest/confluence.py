@@ -105,7 +105,11 @@ class ConfluenceConnector:
         key = f"confluence:{doc}"
         records: list[WorkRecord] = []
         for page_doc in page.records:
-            page_id = str(page_doc.get("id") or page_doc.get("contentId") or "")
+            content = page_doc.get("content")
+            content = content if isinstance(content, dict) else {}
+            page_id = str(
+                content.get("id") or page_doc.get("id") or page_doc.get("contentId") or ""
+            )
             if not page_id:
                 continue
             updated = str(page_doc.get("lastModified") or page_doc.get("updated") or "")
@@ -137,7 +141,7 @@ class ConfluenceConnector:
         page = record.payload
         page_id = record.ref
         detail = page
-        if self.source.get_tool and not (page.get("body") or page.get("content")):
+        if self.source.get_tool and not page.get("body"):
             fetched = await self.caller.call_tool(
                 self.source.get_tool,
                 {"pageId": page_id, "cloudId": self.cloud_id},
