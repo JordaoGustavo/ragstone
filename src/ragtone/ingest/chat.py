@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any
+from typing import Any, Sequence
 
 from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import chat_chunk
@@ -11,6 +11,7 @@ from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import chat_next, paged_records, search_page
 from ragtone.ingest.parse import as_text, later_watermark, window_stamp
 from ragtone.settings import ChatSource, Settings
+from ragtone.watches import select_watch_ids
 
 
 _HISTORY_MESSAGE = re.compile(
@@ -110,8 +111,9 @@ class ChatConnector:
         backfill: bool,
         cursor: dict[str, Any] | None,
         backfill_days: int | None = None,
+        targets: Sequence[str] | None = None,
     ) -> Page:
-        channels = self.source.channels
+        channels = select_watch_ids(self.source.channels, targets)
         if not channels:
             return Page(done=True)
         state = dict(cursor or {"i": 0})

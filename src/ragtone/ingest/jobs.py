@@ -33,6 +33,7 @@ class IngestRun:
     connector: str
     backfill: bool = False
     backfill_days: int | None = None
+    targets: list[str] | None = None
     status: str = "pending"
     producer_done: bool = False
     page_cursor: dict[str, Any] | None = None
@@ -86,6 +87,7 @@ def run_from_doc(doc: dict[str, Any], *, run_id: str | None = None) -> IngestRun
         connector=str(doc.get("connector") or ""),
         backfill=bool(doc.get("backfill")),
         backfill_days=int(doc["backfill_days"]) if doc.get("backfill_days") is not None else None,
+        targets=_targets_from_doc(doc.get("targets")),
         status=str(doc.get("status") or "pending"),
         producer_done=bool(doc.get("producer_done")),
         page_cursor=doc.get("page_cursor") if isinstance(doc.get("page_cursor"), dict) else None,
@@ -100,6 +102,13 @@ def run_from_doc(doc: dict[str, Any], *, run_id: str | None = None) -> IngestRun
         updated_at=str(doc.get("updated_at") or ""),
         seq_next=int(doc.get("seq_next") or 0),
     )
+
+
+def _targets_from_doc(raw: object) -> list[str] | None:
+    if not isinstance(raw, list):
+        return None
+    cleaned = [str(item) for item in raw if str(item).strip()]
+    return cleaned or None
 
 
 def item_from_doc(doc: dict[str, Any], *, item_id: str | None = None) -> IngestItem:
@@ -179,6 +188,7 @@ def job_view(
             "connector": None,
             "backfill": False,
             "backfill_days": None,
+            "targets": None,
             "chunks": 0,
             "error": None,
             "percent": None,
@@ -206,6 +216,7 @@ def job_view(
         total = sum(totals) if len(totals) == len(listed) else None
         backfill = any(item.backfill for item in listed)
         backfill_days = next((item.backfill_days for item in listed if item.backfill), None)
+        targets = next((list(item.targets) for item in listed if item.targets), None)
         percent = progress_percent(
             IngestRun(
                 id="",
@@ -223,6 +234,7 @@ def job_view(
             "connector": connector,
             "backfill": backfill,
             "backfill_days": backfill_days,
+            "targets": targets,
             "chunks": chunks,
             "error": error,
             "percent": percent,
@@ -239,6 +251,7 @@ def job_view(
         "connector": run.connector,
         "backfill": run.backfill,
         "backfill_days": run.backfill_days if run.backfill else None,
+        "targets": list(run.targets) if run.targets else None,
         "chunks": run.chunks,
         "error": run.error,
         "percent": progress_percent(run),
@@ -259,6 +272,7 @@ def _run_summary(run: IngestRun) -> dict[str, Any]:
         "status": run.status,
         "backfill": run.backfill,
         "backfill_days": run.backfill_days if run.backfill else None,
+        "targets": list(run.targets) if run.targets else None,
         "percent": progress_percent(run),
         "discovered": run.discovered,
         "indexed": run.indexed,

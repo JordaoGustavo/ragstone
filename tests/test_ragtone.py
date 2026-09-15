@@ -104,7 +104,7 @@ class _ScriptedConnector:
         self._sent = False
 
     async def next_page(
-        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None
+        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None, targets=None
     ) -> Page:
         if self._sent:
             return Page(done=True)
@@ -141,7 +141,7 @@ class _BoomConnector:
     name = "confluence"
 
     async def next_page(
-        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None
+        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None, targets=None
     ) -> Page:
         raise RuntimeError("upstream 500")
 

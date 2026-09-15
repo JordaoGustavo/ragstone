@@ -130,7 +130,7 @@ class _Scripted:
     def __init__(self) -> None:
         self.pages = 0
 
-    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None) -> Page:
+    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None, targets=None) -> Page:
         self.pages += 1
         if cursor:
             return Page(done=True)
@@ -240,14 +240,78 @@ def test_board_http_rejects_invalid_backfill_range(tmp_path: Path) -> None:
     assert "backfill_days" in response.json()["error"]
 
 
+def test_board_http_enqueues_backfill_for_one_source(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        chat={"enabled": True, "mcp": "chat", "channels": ["eng", "ops"]},
+        foundation_mcps=[FoundationMcp(name="chat", url="http://127.0.0.1:3002/mcp")],
+    )
+    app = create_app(settings)
+    queue = JobQueue()
+    app.state.ctx._queue = queue
+    client = TestClient(app)
+    response = client.post(
+        "/api/admin/sync",
+        json={"name": "chat", "backfill": True, "backfill_days": 30, "targets": ["ops"]},
+    )
+    assert response.status_code == 200
+    job = response.json()["job"]
+    assert job["connector"] == "chat"
+    assert job["targets"] == ["ops"]
+    run = queue.latest_run("chat")
+    assert run is not None
+    assert run.targets == ["ops"]
+
+
+def test_board_http_rejects_source_that_is_not_watched(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        chat={"enabled": True, "mcp": "chat", "channels": ["eng"]},
+        foundation_mcps=[FoundationMcp(name="chat", url="http://127.0.0.1:3002/mcp")],
+    )
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/admin/sync",
+        json={"name": "chat", "backfill": True, "targets": ["ops"]},
+    )
+    assert response.status_code == 400
+    assert "cadastradas" in response.json()["error"]
+
+
+def test_board_http_rejects_targets_when_many_connectors(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        jira={"enabled": True, "mcp": "atlassian", "projects": ["ABC"]},
+        chat={"enabled": True, "mcp": "chat", "channels": ["eng"]},
+        foundation_mcps=[
+            FoundationMcp(name="atlassian", url="http://127.0.0.1:3001/mcp"),
+            FoundationMcp(name="chat", url="http://127.0.0.1:3002/mcp"),
+        ],
+    )
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/admin/sync",
+        json={"names": ["jira", "chat"], "backfill": True, "targets": ["eng"]},
+    )
+    assert response.status_code == 400
+    assert "conector" in response.json()["error"]
+
+
 class _RangeRecorder:
     name = "jira"
 
     def __init__(self) -> None:
         self.days: list[int | None] = []
+        self.targets: list[list[str] | None] = []
 
-    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None) -> Page:
+    async def next_page(
+        self, checkpoint, *, backfill, cursor, backfill_days=None, targets=None
+    ) -> Page:
         self.days.append(backfill_days)
+        self.targets.append(list(targets) if targets else None)
         return Page(done=True)
 
     async def materialize(self, record: WorkRecord) -> FetchResult:
@@ -268,6 +332,22 @@ def test_worker_passes_run_backfill_days(tmp_path: Path) -> None:
     )
     asyncio.run(worker.drain())
     assert recorder.days == [90]
+
+
+def test_worker_passes_run_targets(tmp_path: Path) -> None:
+    recorder = _RangeRecorder()
+    queue = JobQueue()
+    queue.create_run("jira", backfill=True, targets=["ABC"])
+    worker = IngestWorker(
+        InMemoryIndex(),
+        HashEmbedder(8),
+        CheckpointStore(tmp_path / "checkpoints.json"),
+        [recorder],
+        poll_seconds=1,
+        queue=queue,
+    )
+    asyncio.run(worker.drain())
+    assert recorder.targets == [["ABC"]]
 
 
 def test_board_http_admin_shows_queue_progress(tmp_path: Path) -> None:
@@ -350,7 +430,7 @@ class _HoldPage:
         self.release = asyncio.Event()
         self.pages = 0
 
-    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None) -> Page:
+    async def next_page(self, checkpoint, *, backfill, cursor, backfill_days=None, targets=None) -> Page:
         self.started.set()
         await self.release.wait()
         self.pages += 1

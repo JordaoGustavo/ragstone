@@ -121,6 +121,28 @@ def test_board_http_persists_pin(tmp_path: Path) -> None:
     assert again.json()["edges"] == []
 
 
+def test_board_http_renders_emoji_shortcodes_on_cards(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    pinned = client.post(
+        "/api/board/pin",
+        json={
+            "hit": {
+                "source": "chat",
+                "title": "see :thread:",
+                "text": ":+1: ok",
+                "thread_id": "a",
+            }
+        },
+    )
+    node = pinned.json()["nodes"][0]
+    assert node["title"] == "see 🧵"
+    assert node["excerpt"] == "👍 ok"
+    again = client.get("/api/board").json()["nodes"][0]
+    assert again["title"] == "see 🧵"
+    assert again["excerpt"] == "👍 ok"
+
+
 def test_board_http_unlinks_an_edge(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, embedder="hash")
     client = TestClient(create_app(settings))
@@ -215,11 +237,14 @@ def test_admin_page_opens_recents_per_connector(tmp_path: Path) -> None:
     assert 'id="start-backfill"' in page
     assert 'id="admin-backfill-days"' in page
     assert 'id="admin-backfill-connectors"' in page
+    assert 'id="admin-backfill-sources"' in page
     assert 'id="stop-sync"' in page
     js = client.get("/static/board.js").text
     assert "start-backfill" in js
     assert "backfill_days" in js
     assert "fillBackfillConnectors" in js
+    assert "fillBackfillSources" in js
+    assert "backfill-source" in js
     assert "/api/admin/sync/stop" in js
     assert "toggleAdminRecent" in js
     assert "admin-open" in js
@@ -233,6 +258,7 @@ def test_admin_page_opens_recents_per_connector(tmp_path: Path) -> None:
     assert ".admin-tools" in css
     assert ".admin-sheet" in css
     assert ".admin-backfill-connectors" in css
+    assert ".admin-backfill-connectors[hidden]" in css
     assert ".watch-peek" in css
     assert ".watch-presets" in css
     admin = client.get("/api/admin").json()

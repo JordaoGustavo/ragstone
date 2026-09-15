@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from ragtone.emoji import emojize
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -52,6 +54,8 @@ class Hit:
 
     def as_dict(self, *, text_limit: int | None = None) -> dict[str, Any]:
         data = asdict(self)
+        data["title"] = emojize(data["title"])
+        data["text"] = emojize(data["text"])
         if text_limit is not None and len(data["text"]) > text_limit:
             data["text"] = data["text"][:text_limit] + "…"
         return data

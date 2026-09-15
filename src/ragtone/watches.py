@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from ragtone.settings import Settings
 
@@ -97,6 +97,34 @@ def parse_targets(source: str, raw_items: object) -> list[dict[str, Any]]:
 
 def parse_items(source: str, raw_items: object) -> list[str]:
     return [str(item["id"]) for item in parse_targets(source, raw_items)]
+
+
+def select_watch_ids(available: Sequence[str], selected: Sequence[str] | None) -> list[str]:
+    if not selected:
+        return list(available)
+    wanted = {str(item).casefold() for item in selected}
+    return [item for item in available if str(item).casefold() in wanted]
+
+
+def parse_selected_targets(source: str, raw: object, watching: Sequence[str]) -> list[str]:
+    if isinstance(raw, str):
+        raw = [raw]
+    cleaned = parse_items(source, raw)
+    if not cleaned:
+        raise ValueError("escolhe pelo menos uma fonte")
+    allowed = {str(item).casefold(): str(item) for item in watching}
+    selected: list[str] = []
+    seen: set[str] = set()
+    for item in cleaned:
+        key = str(item).casefold()
+        if key not in allowed:
+            raise ValueError(f"{item} não está nas fontes cadastradas")
+        ident = allowed[key]
+        if ident in seen:
+            continue
+        seen.add(ident)
+        selected.append(ident)
+    return selected
 
 
 def yaml_watches(settings: Settings) -> dict[str, list[dict[str, Any]]]:

@@ -182,6 +182,51 @@ def test_chat_backfill_follows_history_cursor() -> None:
     assert result.watermarks["chat:eng"] == "1710000100.000000"
 
 
+def test_chat_backfill_can_target_one_channel() -> None:
+    caller = _Pager(history=[{"messages": [], "has_more": False}])
+    connector = ChatConnector(
+        ChatSource(enabled=True, channels=["eng", "ops"]),
+        caller,
+        pause=0,
+        default_days=30,
+    )
+    page = asyncio.run(
+        connector.next_page(None, backfill=True, cursor=None, targets=["ops"])
+    )
+    assert page.done is True
+    assert caller.calls[0][1]["channel_id"] == "ops"
+    assert [name for name, _ in caller.calls] == ["conversations_history"]
+
+
+def test_jira_backfill_can_target_one_project() -> None:
+    caller = _Pager(
+        search=[
+            {
+                "issues": [
+                    {
+                        "key": "PLAT-1",
+                        "fields": {"summary": "s", "updated": "2026-01-01T00:00:00.000+0000"},
+                    }
+                ],
+                "isLast": True,
+            }
+        ]
+    )
+    connector = JiraConnector(
+        JiraSource(enabled=True, projects=["ABC", "PLAT"]),
+        caller,
+        cloud_id="https://example.atlassian.net",
+        backfill_days=30,
+        pause=0,
+    )
+    page = asyncio.run(
+        connector.next_page(None, backfill=True, cursor=None, targets=["PLAT"])
+    )
+    assert page.done is True
+    assert "project in (PLAT)" in caller.calls[0][1]["jql"]
+    assert "ABC" not in caller.calls[0][1]["jql"]
+
+
 def test_iso_days_ago_zero_is_epoch() -> None:
     from ragtone.ingest.parse import unix_from_iso_date, window_stamp
 

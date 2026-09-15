@@ -152,6 +152,7 @@ class IngestWorker:
                 backfill=run.backfill,
                 cursor=run.page_cursor,
                 backfill_days=run.backfill_days,
+                targets=run.targets,
             )
             current = self.queue.get_run(run.id)
             if current is None or current.status not in ACTIVE:

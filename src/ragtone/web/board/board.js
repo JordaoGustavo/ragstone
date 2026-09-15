@@ -32,6 +32,7 @@ const stopSync = document.getElementById("stop-sync");
 const adminBackfillDays = document.getElementById("admin-backfill-days");
 const adminBackfillForm = document.getElementById("admin-backfill-form");
 const adminBackfillConnectors = document.getElementById("admin-backfill-connectors");
+const adminBackfillSources = document.getElementById("admin-backfill-sources");
 const adminRecentState = new Map();
 let adminConnectorRows = [];
 let sourcePeek = null;
@@ -1025,6 +1026,7 @@ const WATCH_UI = {
     looking: "olhando o canal…",
     noun: "canal",
     fail: "não deu para olhar o canal",
+    sources: "Quais canais",
   },
   jira: {
     title: "Boards / projetos",
@@ -1032,6 +1034,7 @@ const WATCH_UI = {
     looking: "olhando o projeto…",
     noun: "projeto",
     fail: "não deu para olhar o projeto",
+    sources: "Quais projetos",
   },
   confluence: {
     title: "Docs / espaços",
@@ -1039,6 +1042,7 @@ const WATCH_UI = {
     looking: "olhando o doc…",
     noun: "doc",
     fail: "não deu para olhar o doc",
+    sources: "Quais docs",
   },
 };
 
@@ -1105,6 +1109,14 @@ function backfillExtra(job) {
   return " (desde o começo)";
 }
 
+function backfillScope(job) {
+  const extra = job.backfill ? backfillExtra(job) : "";
+  if (job.targets && job.targets.length) {
+    return `${extra} · ${job.targets.join(", ")}`;
+  }
+  return extra;
+}
+
 let backfillRangeSeeded = false;
 
 function fillBackfillRange(preferred) {
@@ -1128,7 +1140,10 @@ function fillBackfillConnectors(connectors) {
   if (!adminBackfillConnectors) return;
   const rows = connectors || [];
   const ids = rows.map((row) => `${row.name}:${row.can_sync ? 1 : 0}`).join(",");
-  if (adminBackfillConnectors.dataset.ids === ids) return;
+  if (adminBackfillConnectors.dataset.ids === ids) {
+    fillBackfillSources();
+    return;
+  }
   const previous = new Map(
     [...adminBackfillConnectors.querySelectorAll('input[name="backfill-connector"]')].map(
       (node) => [node.value, { checked: node.checked, ready: node.dataset.ready === "1" }],
@@ -1147,6 +1162,7 @@ function fillBackfillConnectors(connectors) {
     input.disabled = !row.can_sync;
     const prior = previous.get(row.name);
     input.checked = Boolean(row.can_sync) && (prior && prior.ready ? prior.checked : true);
+    input.addEventListener("change", fillBackfillSources);
     const text = document.createElement("span");
     text.textContent = row.name;
     label.append(input, text);
@@ -1154,6 +1170,65 @@ function fillBackfillConnectors(connectors) {
     adminBackfillConnectors.appendChild(label);
   }
   adminBackfillConnectors.dataset.ids = ids;
+  fillBackfillSources();
+}
+
+function selectedBackfillConnectors() {
+  if (!adminBackfillForm) return [];
+  return [...adminBackfillForm.querySelectorAll('input[name="backfill-connector"]:checked')].map(
+    (node) => node.value,
+  );
+}
+
+function fillBackfillSources() {
+  if (!adminBackfillSources) return;
+  const selected = selectedBackfillConnectors();
+  const legend = adminBackfillSources.querySelector("legend");
+  if (selected.length !== 1) {
+    adminBackfillSources.hidden = true;
+    adminBackfillSources.dataset.ids = "";
+    adminBackfillSources.dataset.connector = "";
+    return;
+  }
+  const row = (adminConnectorRows || []).find((item) => item.name === selected[0]);
+  const watching = row?.watching || [];
+  if (!watching.length) {
+    adminBackfillSources.hidden = true;
+    adminBackfillSources.dataset.ids = "";
+    adminBackfillSources.dataset.connector = "";
+    return;
+  }
+  const key = `${row.name}:${watching.join("|")}`;
+  if (legend) legend.textContent = (WATCH_UI[row.name] || {}).sources || "Quais fontes";
+  if (adminBackfillSources.dataset.ids === key) {
+    adminBackfillSources.hidden = false;
+    return;
+  }
+  const previous = new Map(
+    [...adminBackfillSources.querySelectorAll('input[name="backfill-source"]')].map((node) => [
+      node.value,
+      node.checked,
+    ]),
+  );
+  const sameConnector = adminBackfillSources.dataset.connector === row.name;
+  for (const node of adminBackfillSources.querySelectorAll("label")) {
+    node.remove();
+  }
+  for (const id of watching) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.name = "backfill-source";
+    input.value = id;
+    input.checked = sameConnector && previous.has(id) ? previous.get(id) : true;
+    const text = document.createElement("span");
+    text.textContent = id;
+    label.append(input, text);
+    adminBackfillSources.appendChild(label);
+  }
+  adminBackfillSources.dataset.ids = key;
+  adminBackfillSources.dataset.connector = row.name;
+  adminBackfillSources.hidden = false;
 }
 
 function closeAdmin() {
@@ -1169,15 +1244,15 @@ function jobLine(job) {
   if (!job || job.status === "idle") return "";
   if (job.status === "running") {
     const counts = jobCounts(job);
-    const extra = job.backfill ? backfillExtra(job) : "";
+    const extra = backfillScope(job);
     return `Atualizando ${job.connector}…${counts}${extra}`;
   }
   if (job.status === "cancelled") {
-    const extra = job.backfill ? backfillExtra(job) : "";
+    const extra = backfillScope(job);
     return `Parado — ${job.connector}${extra}`;
   }
   if (job.status === "ok") {
-    const extra = job.backfill ? backfillExtra(job) : "";
+    const extra = backfillScope(job);
     const dead = job.dlq ? ` · ${job.dlq} na DLQ` : "";
     return `Pronto — ${job.chunks} chunks em ${job.connector}${extra}${dead}`;
   }
@@ -1649,6 +1724,7 @@ function renderAdmin(data, { forceConnectors = false } = {}) {
     loadRecents();
   }
   lastJobStatus = jobStatus;
+  adminConnectorRows = data.connectors || [];
   fillBackfillRange(data.backfill_days);
   fillBackfillConnectors(data.connectors);
   adminJob.textContent = jobLine(data.job);
@@ -1680,6 +1756,11 @@ function renderAdmin(data, { forceConnectors = false } = {}) {
       input.disabled = running || input.dataset.ready !== "1";
     }
   }
+  if (adminBackfillSources) {
+    for (const input of adminBackfillSources.querySelectorAll('input[name="backfill-source"]')) {
+      input.disabled = running;
+    }
+  }
   const focused = document.activeElement;
   const typing = Boolean(focused && focused.closest(".admin-watch"));
   if (!typing || forceConnectors) {
@@ -1709,6 +1790,9 @@ async function requestSync(name, extra = {}) {
   }
   if (extra.backfill && extra.backfillDays != null) {
     body.backfill_days = extra.backfillDays;
+  }
+  if (extra.targets && extra.targets.length) {
+    body.targets = extra.targets;
   }
   const res = await fetch("/api/admin/sync", {
     method: "POST",
@@ -1777,11 +1861,23 @@ if (adminBackfillForm) {
       adminJob.textContent = "escolhe pelo menos um conector";
       return;
     }
-    requestSync(selected.length === 1 ? selected[0] : "all", {
+    const extra = {
       backfill: true,
       backfillDays: Number.isNaN(days) ? 365 : days,
       names: selected,
-    });
+    };
+    if (selected.length === 1) {
+      const sourceBoxes = [
+        ...adminBackfillForm.querySelectorAll('input[name="backfill-source"]'),
+      ];
+      const sources = sourceBoxes.filter((node) => node.checked).map((node) => node.value);
+      if (sourceBoxes.length && !sources.length) {
+        adminJob.textContent = "escolhe pelo menos uma fonte";
+        return;
+      }
+      extra.targets = sources;
+    }
+    requestSync(selected.length === 1 ? selected[0] : "all", extra);
   });
 }
 

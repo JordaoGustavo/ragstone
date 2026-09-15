@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ragtone.emoji import emojize
+
 
 def _uid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
@@ -77,6 +79,14 @@ class Board(BaseModel):
             (item for item in self.nodes if item.source == source and item.ref == ref),
             None,
         )
+
+
+def present_board(board: Board) -> dict[str, Any]:
+    data = board.model_dump()
+    for node in data["nodes"]:
+        node["title"] = emojize(node["title"])
+        node["excerpt"] = emojize(node["excerpt"])
+    return data
 
 
 def empty_board() -> Board:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Sequence
 
 from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import jira_chunks
@@ -10,6 +10,7 @@ from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import jira_next, search_page
 from ragtone.ingest.parse import as_records, as_text, later_watermark, window_stamp
 from ragtone.settings import JiraSource, Settings
+from ragtone.watches import select_watch_ids
 
 
 def scoped_jql(projects: list[str], template: str, stamp: str) -> str:
@@ -74,8 +75,9 @@ class JiraConnector:
         backfill: bool,
         cursor: dict[str, Any] | None,
         backfill_days: int | None = None,
+        targets: Sequence[str] | None = None,
     ) -> Page:
-        projects = self.source.projects
+        projects = select_watch_ids(self.source.projects, targets)
         if not projects:
             return Page(done=True)
         state = dict(cursor or {"i": 0})

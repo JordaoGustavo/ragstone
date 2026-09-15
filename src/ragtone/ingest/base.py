@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from ragtone.ingest.parse import later_watermark
 from ragtone.models import Chunk
@@ -40,6 +40,7 @@ class Connector(Protocol):
         backfill: bool,
         cursor: dict[str, Any] | None,
         backfill_days: int | None = None,
+        targets: Sequence[str] | None = None,
     ) -> Page: ...
 
     async def materialize(self, record: WorkRecord) -> FetchResult: ...

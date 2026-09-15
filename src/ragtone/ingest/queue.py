@@ -376,7 +376,12 @@ class JobQueue:
         self._b.ensure()
 
     def create_run(
-        self, connector: str, *, backfill: bool, backfill_days: int | None = None
+        self,
+        connector: str,
+        *,
+        backfill: bool,
+        backfill_days: int | None = None,
+        targets: list[str] | None = None,
     ) -> IngestRun:
         stamp = now_iso()
         run = IngestRun(
@@ -384,6 +389,7 @@ class JobQueue:
             connector=connector,
             backfill=backfill,
             backfill_days=backfill_days if backfill else None,
+            targets=list(targets) if targets else None,
             status="pending",
             created_at=stamp,
             updated_at=stamp,
@@ -660,6 +666,7 @@ def _run_mappings() -> dict[str, Any]:
             "connector": {"type": "keyword"},
             "backfill": {"type": "boolean"},
             "backfill_days": {"type": "integer"},
+            "targets": {"type": "keyword"},
             "status": {"type": "keyword"},
             "producer_done": {"type": "boolean"},
             "page_cursor": {"type": "object", "enabled": False},

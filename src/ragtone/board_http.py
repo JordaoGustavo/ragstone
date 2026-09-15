@@ -24,6 +24,7 @@ from ragtone.board import (
     move_node,
     new_walk,
     pin_node,
+    present_board,
     unlink_edge,
     unpin_node,
 )
@@ -35,7 +36,13 @@ from ragtone.ingest.run import IngestConfigError, with_worker
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
 from ragtone.watch_preview import peek_source
-from ragtone.watches import SOURCES, WatchStore, parse_backfill_days, parse_targets
+from ragtone.watches import (
+    SOURCES,
+    WatchStore,
+    parse_backfill_days,
+    parse_selected_targets,
+    parse_targets,
+)
 
 log = logging.getLogger(__name__)
 WEB = Path(__file__).parent / "web" / "board"
@@ -178,12 +185,16 @@ def _load_board(ctx: BoardContext) -> Board:
     return _refresh_unreads(ctx, ctx.store.load())
 
 
+def _board_json(board: Board) -> JSONResponse:
+    return JSONResponse(present_board(board))
+
+
 async def index(_request: Request) -> FileResponse:
     return FileResponse(WEB / "index.html")
 
 
 async def get_board(request: Request) -> JSONResponse:
-    return JSONResponse(_load_board(_ctx(request)).model_dump())
+    return _board_json(_load_board(_ctx(request)))
 
 
 async def save_camera(request: Request) -> JSONResponse:
@@ -194,7 +205,7 @@ async def save_camera(request: Request) -> JSONResponse:
     board.camera.y = float(body["y"])
     board.camera.zoom = float(body["zoom"])
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def pin(request: Request) -> JSONResponse:
@@ -208,7 +219,7 @@ async def pin(request: Request) -> JSONResponse:
     if added is not None:
         capture_seen(added, _lookup(ctx, added))
     store.save(board)
-    return JSONResponse(_refresh_unreads(ctx, board).model_dump())
+    return _board_json(_refresh_unreads(ctx, board))
 
 
 async def link(request: Request) -> JSONResponse:
@@ -217,7 +228,7 @@ async def link(request: Request) -> JSONResponse:
     board = store.load()
     link_nodes(board, body["from_id"], body["to_id"])
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def unlink(request: Request) -> JSONResponse:
@@ -229,7 +240,7 @@ async def unlink(request: Request) -> JSONResponse:
     except KeyError:
         return JSONResponse({"error": "link not found"}, status_code=404)
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def unpin(request: Request) -> JSONResponse:
@@ -241,7 +252,7 @@ async def unpin(request: Request) -> JSONResponse:
     except KeyError:
         return JSONResponse({"error": "card not found"}, status_code=404)
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def patch_node(request: Request) -> JSONResponse:
@@ -250,7 +261,7 @@ async def patch_node(request: Request) -> JSONResponse:
     board = store.load()
     move_node(board, body["id"], float(body["x"]), float(body["y"]))
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def create_walk(request: Request) -> JSONResponse:
@@ -259,7 +270,7 @@ async def create_walk(request: Request) -> JSONResponse:
     board = store.load()
     new_walk(board, str(body.get("name") or ""))
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def activate_walk(request: Request) -> JSONResponse:
@@ -271,7 +282,7 @@ async def activate_walk(request: Request) -> JSONResponse:
         return JSONResponse({"error": "walk not found"}, status_code=404)
     board.active_walk_id = walk_id
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def drop_walk(request: Request) -> JSONResponse:
@@ -283,7 +294,7 @@ async def drop_walk(request: Request) -> JSONResponse:
     except KeyError:
         return JSONResponse({"error": "walk not found"}, status_code=404)
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return _board_json(board)
 
 
 async def search(request: Request) -> JSONResponse:
@@ -398,6 +409,32 @@ def _sync_names(ctx: BoardContext, name: str) -> tuple[list[str] | None, JSONRes
     return [name], None
 
 
+def _sync_targets(
+    ctx: BoardContext, body: dict, names: list[str]
+) -> tuple[list[str] | None, JSONResponse | None]:
+    if "targets" not in body and "target" not in body:
+        return None, None
+    if len(names) != 1:
+        return None, JSONResponse(
+            {"error": "escolhe um conector para filtrar as fontes"},
+            status_code=400,
+        )
+    raw = body.get("targets", body.get("target"))
+    name = names[0]
+    watching = next(
+        (
+            row.get("watching") or []
+            for row in ctx.admin_snapshot()["connectors"]
+            if row["name"] == name
+        ),
+        [],
+    )
+    try:
+        return parse_selected_targets(name, raw, watching), None
+    except ValueError as exc:
+        return None, JSONResponse({"error": str(exc)}, status_code=400)
+
+
 async def _run_sync(ctx: BoardContext, names: list[str]) -> None:
     queue = ctx.jobs()
     if queue is None:
@@ -450,6 +487,9 @@ async def start_sync(request: Request) -> JSONResponse:
         for item in resolved:
             if item not in names:
                 names.append(item)
+    targets, error = _sync_targets(ctx, body, names)
+    if error is not None:
+        return error
     if ctx.job.get("status") == "running":
         return JSONResponse({"error": "já tem uma atualização em curso"}, status_code=409)
     queue = ctx.jobs()
@@ -459,7 +499,7 @@ async def start_sync(request: Request) -> JSONResponse:
     if busy:
         return JSONResponse({"error": "já tem uma atualização em curso"}, status_code=409)
     for item in names:
-        queue.create_run(item, backfill=backfill, backfill_days=days)
+        queue.create_run(item, backfill=backfill, backfill_days=days, targets=targets)
     ctx.job = queue.admin_job()
     if ctx.live_index() is not None:
         ctx._sync_task = asyncio.create_task(_run_sync(ctx, names))
@@ -527,7 +567,7 @@ async def mark_seen(request: Request) -> JSONResponse:
         return JSONResponse({"error": "card not found"}, status_code=404)
     capture_seen(node, _lookup(ctx, node))
     store.save(board)
-    return JSONResponse(_refresh_unreads(ctx, board).model_dump())
+    return _board_json(_refresh_unreads(ctx, board))
 
 
 async def peek_watch(request: Request) -> JSONResponse:

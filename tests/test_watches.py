@@ -3,13 +3,22 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from starlette.testclient import TestClient
 
 from ragtone.board_http import create_app
 from ragtone.ingest.confluence import ConfluenceConnector, scoped_cql
 from ragtone.ingest.jira import JiraConnector, scoped_jql
 from ragtone.settings import ChatSource, ConfluenceSource, FoundationMcp, JiraSource, Settings
-from ragtone.watches import WatchStore, clean_watch_item, overlay_settings, parse_cutoff, parse_items
+from ragtone.watches import (
+    WatchStore,
+    clean_watch_item,
+    overlay_settings,
+    parse_cutoff,
+    parse_items,
+    parse_selected_targets,
+    select_watch_ids,
+)
 
 
 class _BoomCaller:
@@ -218,6 +227,19 @@ def test_board_http_sync_rejects_jira_without_projects(tmp_path: Path) -> None:
 
 def test_parse_items_dedupes() -> None:
     assert parse_items("chat", ["eng", "#eng", "ENG"]) == ["eng"]
+
+
+def test_select_watch_ids_keeps_registered_order() -> None:
+    assert select_watch_ids(["eng", "ops", "plat"], ["ops", "eng"]) == ["eng", "ops"]
+    assert select_watch_ids(["eng", "ops"], None) == ["eng", "ops"]
+
+
+def test_parse_selected_targets_requires_registered_source() -> None:
+    assert parse_selected_targets("chat", ["#ops"], ["eng", "ops"]) == ["ops"]
+    with pytest.raises(ValueError, match="cadastradas"):
+        parse_selected_targets("chat", ["random"], ["eng"])
+    with pytest.raises(ValueError, match="fonte"):
+        parse_selected_targets("chat", [], ["eng"])
 
 
 def test_board_http_saves_channel_backfill_range(tmp_path: Path) -> None:

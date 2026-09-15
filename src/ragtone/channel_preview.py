@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from ragtone.admin import mcp_is_configured
+from ragtone.emoji import emojize
 from ragtone.ingest.client import FoundationClient, ToolCaller
 from ragtone.ingest.parse import as_records, as_text, unix_days_ago
 from ragtone.settings import Settings
@@ -50,7 +51,7 @@ def slack_plain(text: str) -> str:
     cleaned = _SLACK_MRKDWN_USER.sub("", text)
     cleaned = _SLACK_MRKDWN_LINK.sub(r"\2", cleaned)
     cleaned = _SLACK_MRKDWN_URL.sub(r"\1", cleaned)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return emojize(re.sub(r"\s+", " ", cleaned).strip())
 
 
 def _clip(text: str, limit: int = TEXT_LIMIT) -> str:

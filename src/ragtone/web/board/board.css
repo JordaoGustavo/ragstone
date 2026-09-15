@@ -960,6 +960,10 @@ body.admin-open .rail-peek {
   border: 0;
 }
 
+.admin-backfill-connectors[hidden] {
+  display: none;
+}
+
 .admin-backfill-connectors legend {
   padding: 0;
   margin: 0 0 6px;
@@ -982,6 +986,11 @@ body.admin-open .rail-peek {
 
 .admin-backfill-connectors input {
   accent-color: var(--copper);
+}
+
+#admin-backfill-sources:not([hidden]) {
+  flex-basis: 100%;
+  padding-left: 2px;
 }
 
 .admin-backfill-actions {

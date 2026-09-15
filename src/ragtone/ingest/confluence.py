@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Sequence
 
 from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import confluence_chunks
@@ -10,6 +10,7 @@ from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import confluence_next, search_page
 from ragtone.ingest.parse import as_text, later_watermark, window_stamp
 from ragtone.settings import ConfluenceSource, Settings
+from ragtone.watches import select_watch_ids
 
 
 def scoped_cql(docs: list[str], template: str, stamp: str) -> str:
@@ -75,8 +76,9 @@ class ConfluenceConnector:
         backfill: bool,
         cursor: dict[str, Any] | None,
         backfill_days: int | None = None,
+        targets: Sequence[str] | None = None,
     ) -> Page:
-        docs = self.source.docs
+        docs = select_watch_ids(self.source.docs, targets)
         if not docs:
             return Page(done=True)
         state = dict(cursor or {"i": 0})

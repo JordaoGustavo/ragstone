@@ -25,7 +25,7 @@ class _NamedConnector:
         self._sent = False
 
     async def next_page(
-        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None
+        self, checkpoint: str | None, *, backfill: bool, cursor, backfill_days=None, targets=None
     ) -> Page:
         self.calls += 1
         if self._sent:
