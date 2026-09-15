@@ -39,9 +39,10 @@ def test_confluence_splits_on_headings() -> None:
     sections = split_markdown_sections(body, "Page")
     assert [title for title, _ in sections] == ["Intro", "Setup", "Run"]
     chunks = confluence_chunks(page_id="42", title="Page", body=body)
-    assert [chunk.native_id for chunk in chunks] == ["42:0", "42:1", "42:2"]
-    assert chunks[1].parent_id == "42"
-    assert "do this" in chunks[1].text
+    assert [chunk.native_id for chunk in chunks] == ["42", "42:0", "42:1", "42:2"]
+    assert chunks[0].title == "Page"
+    assert chunks[2].parent_id == "42"
+    assert "do this" in chunks[2].text
 
 
 def test_jira_issue_and_comments_are_separate_chunks() -> None:
@@ -268,6 +269,46 @@ def test_retrieval_search_finds_issue_by_key() -> None:
     service = RetrievalService(store, embedder)
     hits = service.search("ABC-12")
     assert hits[0]["native_id"] == "ABC-12"
+
+
+def test_retrieval_search_returns_roots_not_chunks() -> None:
+    embedder = HashEmbedder(32)
+    store = InMemoryIndex()
+    parent = chat_chunk(
+        message_id="1.0",
+        text="what broke?",
+        channel="eng",
+        thread_id="1.0",
+        created_at="1.0",
+    )
+    reply = chat_chunk(
+        message_id="1.1",
+        text="the SSO gateway exploded",
+        channel="eng",
+        thread_id="1.0",
+        created_at="1.1",
+    )
+    pages = confluence_chunks(
+        page_id="99",
+        title="Runbook",
+        body="## Symptoms\ntimeout\n\n## Fix\nrestart sso\n",
+    )
+    issue = jira_chunks(
+        key="ABC-9",
+        summary="Login",
+        description="Users cannot sign in",
+        comments=[{"id": "c1", "body": "VPN tunnel is down", "author": "ana"}],
+    )
+    docs = [parent, reply, *pages, *issue]
+    store.upsert(docs, embedder.embed([chunk.text for chunk in docs]))
+    service = RetrievalService(store, embedder)
+    thread = service.search("SSO gateway exploded", source="chat")
+    assert [hit["native_id"] for hit in thread] == ["1.0"]
+    page = service.search("restart sso", source="confluence")
+    assert [hit["native_id"] for hit in page] == ["99"]
+    assert page[0]["title"] == "Runbook"
+    ticket = service.search("VPN tunnel", source="jira")
+    assert [hit["native_id"] for hit in ticket] == ["ABC-9"]
 
 
 def test_retrieval_expands_thread_and_page() -> None:

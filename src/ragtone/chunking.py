@@ -62,7 +62,20 @@ def confluence_chunks(
     updated_at: str | None = None,
     authors: tuple[str, ...] = (),
 ) -> list[Chunk]:
-    chunks: list[Chunk] = []
+    body_text = (body or title).strip()
+    chunks = [
+        Chunk(
+            source="confluence",
+            native_id=page_id,
+            text=body_text or title,
+            title=title,
+            url=url,
+            parent_id=page_id,
+            channel_or_space=space,
+            updated_at=updated_at,
+            authors=authors,
+        )
+    ]
     for index, (heading, section) in enumerate(split_markdown_sections(body, title)):
         chunks.append(
             Chunk(

@@ -464,6 +464,40 @@ def test_board_http_search_returns_hits(tmp_path: Path) -> None:
     assert body["hits"][0]["native_id"] == "ABC-12"
 
 
+def test_board_http_search_returns_thread_parent(tmp_path: Path) -> None:
+    docs = [
+        chat_chunk(
+            message_id="1.0",
+            text="what broke?",
+            channel="eng",
+            thread_id="1.0",
+            created_at="1.0",
+        ),
+        chat_chunk(
+            message_id="1.1",
+            text="the SSO gateway exploded",
+            channel="eng",
+            thread_id="1.0",
+            created_at="1.1",
+        ),
+        *confluence_chunks(
+            page_id="99",
+            title="Runbook",
+            body="## Symptoms\ntimeout\n\n## Fix\nrestart sso\n",
+        ),
+    ]
+    client, _, _ = _app_with_index(tmp_path, docs)
+    thread = client.get(
+        "/api/search", params={"q": "SSO gateway", "source": "chat"}
+    ).json()["hits"]
+    assert [hit["native_id"] for hit in thread] == ["1.0"]
+    page = client.get(
+        "/api/search", params={"q": "restart sso", "source": "confluence"}
+    ).json()["hits"]
+    assert [hit["native_id"] for hit in page] == ["99"]
+    assert page[0]["title"] == "Runbook"
+
+
 def test_board_http_search_opens_jira_from_cloud_id(tmp_path: Path) -> None:
     docs = [
         *jira_chunks(key="ABC-12", summary="SSO timeout", description="gateway"),
