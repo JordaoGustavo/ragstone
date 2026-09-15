@@ -13,13 +13,9 @@ WATCH_KIND = {
 
 
 def idle_job() -> dict[str, Any]:
-    return {
-        "status": "idle",
-        "connector": None,
-        "backfill": False,
-        "chunks": 0,
-        "error": None,
-    }
+    from ragtone.ingest.jobs import job_view
+
+    return job_view(None)
 
 
 def mcp_is_configured(settings: Settings, mcp_name: str) -> bool:

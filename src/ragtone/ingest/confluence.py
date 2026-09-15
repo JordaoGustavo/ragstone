@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from ragtone.chunking import confluence_chunks
-from ragtone.ingest.base import FetchResult
+from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
-from ragtone.ingest.page import confluence_next, paged_records
+from ragtone.ingest.page import confluence_next, search_page
 from ragtone.ingest.parse import as_text, iso_days_ago, later_watermark
 from ragtone.settings import ConfluenceSource, Settings
 
@@ -44,55 +45,86 @@ class ConfluenceConnector:
         self.pause = pause
 
     async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+        return await fetch_all(self, checkpoint, backfill=backfill)
+
+    async def next_page(
+        self,
+        checkpoint: str | None,
+        *,
+        backfill: bool,
+        cursor: dict[str, Any] | None,
+    ) -> Page:
         if not self.source.docs:
-            return FetchResult()
+            return Page(done=True)
         stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
         cql = scoped_cql(self.source.docs, self.source.cql, stamp)
-        pages = await paged_records(
+        page = await search_page(
             self.caller,
             self.source.search_tool,
             {"cql": cql, "cloudId": self.cloud_id, "limit": 25},
             "results",
             "pages",
             "values",
-            pause=self.pause,
             next_args=confluence_next,
+            extra=cursor,
         )
-        chunks = []
-        newest = checkpoint
-        for page in pages:
-            page_id = str(page.get("id") or page.get("contentId") or "")
+        if self.pause:
+            await asyncio.sleep(self.pause)
+        records: list[WorkRecord] = []
+        for page_doc in page.records:
+            page_id = str(page_doc.get("id") or page_doc.get("contentId") or "")
             if not page_id:
                 continue
-            detail = page
-            if self.source.get_tool and not (page.get("body") or page.get("content")):
-                fetched = await self.caller.call_tool(
-                    self.source.get_tool,
-                    {"pageId": page_id, "cloudId": self.cloud_id},
+            updated = str(page_doc.get("lastModified") or page_doc.get("updated") or "")
+            records.append(
+                WorkRecord(
+                    ref=page_id,
+                    payload=page_doc,
+                    watermark=updated or None,
+                    checkpoint_key="confluence",
                 )
-                if isinstance(fetched, dict):
-                    detail = fetched
+            )
+        return Page(
+            records=records,
+            cursor=page.next_args,
+            total=page.total,
+            done=not page.next_args,
+        )
+
+    async def materialize(self, record: WorkRecord) -> FetchResult:
+        page = record.payload
+        page_id = record.ref
+        detail = page
+        if self.source.get_tool and not (page.get("body") or page.get("content")):
+            fetched = await self.caller.call_tool(
+                self.source.get_tool,
+                {"pageId": page_id, "cloudId": self.cloud_id},
+            )
+            if isinstance(fetched, dict):
+                detail = fetched
+            if self.pause:
                 await asyncio.sleep(self.pause)
-            body = as_text(
-                detail.get("body")
-                or detail.get("content")
-                or (detail.get("text"))
-            )
-            updated = str(detail.get("lastModified") or detail.get("updated") or "")
-            title = as_text(detail.get("title") or page.get("title") or page_id)
-            chunks.extend(
-                confluence_chunks(
-                    page_id=page_id,
-                    title=title,
-                    body=body or title,
-                    url=str(detail.get("url") or detail.get("_links", {}).get("webui") or ""),
-                    space=str(detail.get("space") or detail.get("spaceKey") or ""),
-                    updated_at=updated or None,
-                )
-            )
-            newest = later_watermark(newest, updated)
+        body = as_text(
+            detail.get("body") or detail.get("content") or (detail.get("text"))
+        )
+        updated = str(detail.get("lastModified") or detail.get("updated") or record.watermark or "")
+        title = as_text(detail.get("title") or page.get("title") or page_id)
+        chunks = confluence_chunks(
+            page_id=page_id,
+            title=title,
+            body=body or title,
+            url=str(detail.get("url") or detail.get("_links", {}).get("webui") or ""),
+            space=str(detail.get("space") or detail.get("spaceKey") or ""),
+            updated_at=updated or None,
+        )
+        newest = later_watermark(record.watermark, updated)
+        if self.pause:
             await asyncio.sleep(self.pause)
-        return FetchResult(chunks=chunks, watermark=newest or stamp)
+        return FetchResult(
+            chunks=chunks,
+            watermark=newest,
+            watermarks={"confluence": newest} if newest else {},
+        )
 
 
 def build_confluence(

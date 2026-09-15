@@ -89,12 +89,12 @@ def run_up(
     ensure_elasticsearch(settings)
     index = open_index(settings)
     index.ensure_index()
+    es = getattr(index, "es", None)
+    name = getattr(index, "index_name", None)
+    if es is not None and name:
+        from ragtone.ingest.queue import JobQueue
 
-    if backfill:
-        log.info("running ingest --backfill before the stack stays up")
-        ingest = subprocess.run(child_argv("ingest", config=config, extra=["--backfill"]))
-        if ingest.returncode != 0:
-            log.warning("backfill exited %s — starting the stack anyway", ingest.returncode)
+        JobQueue.elasticsearch(es, name).ensure()
 
     names = ["serve", "board"]
     if sync:
@@ -102,7 +102,8 @@ def run_up(
     procs: dict[str, subprocess.Popen] = {}
     try:
         for name in names:
-            procs[name] = subprocess.Popen(child_argv(name, config=config))
+            extra = ["--backfill"] if name == "sync" and backfill else None
+            procs[name] = subprocess.Popen(child_argv(name, config=config, extra=extra))
         board_url = f"http://{settings.board_host}:{settings.board_port}"
         mcp_url = f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"
         print(f"Trilha  {board_url}")

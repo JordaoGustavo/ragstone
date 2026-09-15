@@ -8,7 +8,7 @@ from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import chat_chunk, confluence_chunks, jira_chunks, split_markdown_sections
 from ragtone.embeddings import HashEmbedder
 from ragtone.index import hybrid_search_body
-from ragtone.ingest.base import FetchResult
+from ragtone.ingest.base import FetchResult, Page, WorkRecord
 from ragtone.ingest.parse import as_records, as_text
 from ragtone.ingest.worker import IngestWorker
 from ragtone.mcp_server import build_mcp, run_mcp
@@ -86,8 +86,20 @@ class _ScriptedConnector:
     def __init__(self, chunks: list[Chunk], watermark: str) -> None:
         self._chunks = chunks
         self._watermark = watermark
+        self._sent = False
 
-    async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+    async def next_page(self, checkpoint: str | None, *, backfill: bool, cursor) -> Page:
+        if self._sent:
+            return Page(done=True)
+        self._sent = True
+        ref = self._chunks[0].parent_id or self._chunks[0].native_id
+        return Page(
+            records=[WorkRecord(ref=ref, payload={}, watermark=self._watermark)],
+            total=1,
+            done=True,
+        )
+
+    async def materialize(self, record: WorkRecord) -> FetchResult:
         return FetchResult(chunks=self._chunks, watermark=self._watermark)
 
 
@@ -111,7 +123,10 @@ def test_ingest_worker_upserts_and_saves_watermark(tmp_path: Path) -> None:
 class _BoomConnector:
     name = "confluence"
 
-    async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+    async def next_page(self, checkpoint: str | None, *, backfill: bool, cursor) -> Page:
+        raise RuntimeError("upstream 500")
+
+    async def materialize(self, record: WorkRecord) -> FetchResult:
         raise RuntimeError("upstream 500")
 
 

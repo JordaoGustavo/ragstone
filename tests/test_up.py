@@ -43,6 +43,39 @@ def test_ensure_elasticsearch_skips_docker_when_already_up(monkeypatch) -> None:
     assert ran == []
 
 
+def test_run_up_backfill_starts_board_before_sync(monkeypatch, tmp_path: Path) -> None:
+    fake = _FakeIndex(True)
+    spawned: list[list[str]] = []
+
+    class _Proc:
+        def __init__(self, argv: list[str]) -> None:
+            spawned.append(argv)
+
+        def poll(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr("ragtone.up.open_index", lambda settings: fake)
+    monkeypatch.setattr("ragtone.up.subprocess.Popen", lambda argv: _Proc(argv))
+    monkeypatch.setattr("ragtone.up.webbrowser.open", lambda url: None)
+    run_up(Settings(embedder="hash", data_dir=tmp_path), backfill=True, open_browser=False)
+    assert [item[-2] if item[-1] == "--backfill" else item[-1] for item in spawned] == [
+        "serve",
+        "board",
+        "sync",
+    ]
+    assert spawned[-1][-1] == "--backfill"
+    assert not any(item[-1] == "ingest" for item in spawned)
+
+
 def test_run_up_starts_serve_board_and_sync(monkeypatch, tmp_path: Path) -> None:
     fake = _FakeIndex(True)
     spawned: list[list[str]] = []

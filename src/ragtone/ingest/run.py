@@ -9,6 +9,7 @@ from ragtone.checkpoints import CheckpointStore
 from ragtone.embeddings import build_embedder
 from ragtone.index import SearchIndex
 from ragtone.ingest.client import FoundationClient
+from ragtone.ingest.queue import JobQueue
 from ragtone.ingest.worker import IngestWorker, build_connectors
 from ragtone.settings import Settings
 from ragtone.watches import WatchStore, overlay_settings
@@ -48,6 +49,7 @@ async def with_worker(
     fn: Callable[[IngestWorker], Awaitable[object]],
     *,
     names: Sequence[str] | None = None,
+    queue: JobQueue | None = None,
 ) -> object:
     watching = WatchStore(settings.watch_path).resolved(settings)
     settings = overlay_settings(settings, watching)
@@ -73,6 +75,8 @@ async def with_worker(
             )
         store = open_index(settings)
         store.ensure_index()
+        jobs = queue or JobQueue.elasticsearch(store.es, settings.elasticsearch_index)
+        jobs.ensure()
         checkpoints = CheckpointStore(settings.checkpoint_path)
         connectors = [
             connector
@@ -91,5 +95,6 @@ async def with_worker(
             checkpoints,
             connectors,
             poll_seconds=settings.poll_seconds,
+            queue=jobs,
         )
         return await fn(worker)

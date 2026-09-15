@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from ragtone.chunking import jira_chunks
-from ragtone.ingest.base import FetchResult
+from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
-from ragtone.ingest.page import jira_next, paged_records
+from ragtone.ingest.page import jira_next, search_page
 from ragtone.ingest.parse import as_records, as_text, iso_days_ago, later_watermark
 from ragtone.settings import JiraSource, Settings
 
@@ -43,82 +44,111 @@ class JiraConnector:
         self.pause = pause
 
     async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+        return await fetch_all(self, checkpoint, backfill=backfill)
+
+    async def next_page(
+        self,
+        checkpoint: str | None,
+        *,
+        backfill: bool,
+        cursor: dict[str, Any] | None,
+    ) -> Page:
         if not self.source.projects:
-            return FetchResult()
+            return Page(done=True)
         stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
         jql = scoped_jql(self.source.projects, self.source.jql, stamp)
-        issues = await paged_records(
+        page = await search_page(
             self.caller,
             self.source.search_tool,
             {"jql": jql, "cloudId": self.cloud_id, "maxResults": 50},
             "issues",
             "results",
             "values",
-            pause=self.pause,
             next_args=jira_next,
+            extra=cursor,
         )
-        chunks = []
-        newest = checkpoint
-        for issue in issues:
+        if self.pause:
+            await asyncio.sleep(self.pause)
+        records: list[WorkRecord] = []
+        for issue in page.records:
             key = str(issue.get("key") or issue.get("id") or "")
             if not key:
                 continue
-            detail = issue
-            if self.source.get_tool and "fields" not in issue:
-                fetched = await self.caller.call_tool(
-                    self.source.get_tool,
-                    {"issueIdOrKey": key, "cloudId": self.cloud_id},
-                )
-                if isinstance(fetched, dict):
-                    detail = fetched
-                await asyncio.sleep(self.pause)
-            fields = detail.get("fields") if isinstance(detail.get("fields"), dict) else detail
-            comments = []
-            raw_comments = fields.get("comment") if isinstance(fields, dict) else None
-            comment_list = []
-            if isinstance(raw_comments, dict):
-                comment_list = as_records(raw_comments, "comments")
-            elif isinstance(raw_comments, list):
-                comment_list = [item for item in raw_comments if isinstance(item, dict)]
-            for comment in comment_list:
-                comments.append(
-                    {
-                        "id": str(comment.get("id") or comment.get("created") or len(comments)),
-                        "body": as_text(comment.get("body")),
-                        "author": as_text(
-                            (comment.get("author") or {}).get("displayName")
-                            if isinstance(comment.get("author"), dict)
-                            else comment.get("author")
-                        ),
-                        "updated_at": str(comment.get("updated") or comment.get("created") or ""),
-                    }
-                )
-            updated = str(fields.get("updated") or detail.get("updated") or "")
-            chunks.extend(
-                jira_chunks(
-                    key=key,
-                    summary=as_text(fields.get("summary") or detail.get("summary")),
-                    description=as_text(fields.get("description") or detail.get("description")),
-                    url=str(detail.get("self") or detail.get("url") or ""),
-                    comments=comments,
-                    updated_at=updated or None,
-                    authors=tuple(
-                        filter(
-                            None,
-                            [
-                                as_text(
-                                    (fields.get("assignee") or {}).get("displayName")
-                                    if isinstance(fields.get("assignee"), dict)
-                                    else None
-                                )
-                            ],
-                        )
-                    ),
-                )
+            fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else issue
+            updated = str(fields.get("updated") or issue.get("updated") or "")
+            records.append(
+                WorkRecord(ref=key, payload=issue, watermark=updated or None, checkpoint_key="jira")
             )
-            newest = later_watermark(newest, updated)
+        return Page(
+            records=records,
+            cursor=page.next_args,
+            total=page.total,
+            done=not page.next_args,
+        )
+
+    async def materialize(self, record: WorkRecord) -> FetchResult:
+        issue = record.payload
+        key = record.ref
+        detail = issue
+        if self.source.get_tool and "fields" not in issue:
+            fetched = await self.caller.call_tool(
+                self.source.get_tool,
+                {"issueIdOrKey": key, "cloudId": self.cloud_id},
+            )
+            if isinstance(fetched, dict):
+                detail = fetched
+            if self.pause:
+                await asyncio.sleep(self.pause)
+        fields = detail.get("fields") if isinstance(detail.get("fields"), dict) else detail
+        comments = []
+        raw_comments = fields.get("comment") if isinstance(fields, dict) else None
+        comment_list = []
+        if isinstance(raw_comments, dict):
+            comment_list = as_records(raw_comments, "comments")
+        elif isinstance(raw_comments, list):
+            comment_list = [item for item in raw_comments if isinstance(item, dict)]
+        for comment in comment_list:
+            comments.append(
+                {
+                    "id": str(comment.get("id") or comment.get("created") or len(comments)),
+                    "body": as_text(comment.get("body")),
+                    "author": as_text(
+                        (comment.get("author") or {}).get("displayName")
+                        if isinstance(comment.get("author"), dict)
+                        else comment.get("author")
+                    ),
+                    "updated_at": str(comment.get("updated") or comment.get("created") or ""),
+                }
+            )
+        updated = str(fields.get("updated") or detail.get("updated") or record.watermark or "")
+        chunks = jira_chunks(
+            key=key,
+            summary=as_text(fields.get("summary") or detail.get("summary")),
+            description=as_text(fields.get("description") or detail.get("description")),
+            url=str(detail.get("self") or detail.get("url") or ""),
+            comments=comments,
+            updated_at=updated or None,
+            authors=tuple(
+                filter(
+                    None,
+                    [
+                        as_text(
+                            (fields.get("assignee") or {}).get("displayName")
+                            if isinstance(fields.get("assignee"), dict)
+                            else None
+                        )
+                    ],
+                )
+            ),
+        )
+        newest = later_watermark(record.watermark, updated)
+        if self.pause:
             await asyncio.sleep(self.pause)
-        return FetchResult(chunks=chunks, watermark=newest or stamp)
+        return FetchResult(
+            chunks=chunks,
+            watermark=newest,
+            watermarks={"jira": newest} if newest else {},
+        )
 
 
 def build_jira(settings: Settings, callers: dict[str, ToolCaller]) -> JiraConnector | None:

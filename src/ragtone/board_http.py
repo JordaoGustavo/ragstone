@@ -16,6 +16,7 @@ from ragtone.board import BoardStore, delete_walk, link_nodes, move_node, new_wa
 from ragtone.checkpoints import CheckpointStore
 from ragtone.embeddings import build_embedder
 from ragtone.index import SearchIndex
+from ragtone.ingest.queue import JobQueue
 from ragtone.ingest.run import IngestConfigError, with_worker
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
@@ -41,6 +42,7 @@ class BoardContext:
         self.job = idle_job()
         self._sync_task: asyncio.Task | None = None
         self.watches = WatchStore(settings.watch_path)
+        self._queue: JobQueue | None = None
 
     def live_index(self) -> SearchIndex | None:
         try:
@@ -60,18 +62,31 @@ class BoardContext:
         except Exception:
             return None
 
+    def jobs(self) -> JobQueue | None:
+        if self._queue is not None:
+            return self._queue
+        index = self.live_index()
+        if index is None:
+            return None
+        queue = JobQueue.elasticsearch(index.es, self.settings.elasticsearch_index)
+        queue.ensure()
+        self._queue = queue
+        return queue
+
     def admin_snapshot(self) -> dict:
         index = self.live_index()
         if index is None:
             stats = {"ok": False, "total": 0, "by_source": {}}
         else:
             stats = index.stats()
+        queue = self.jobs()
+        job = queue.admin_job() if queue is not None else self.job
         return snapshot(
             self.settings,
             stats=stats,
             checkpoints=CheckpointStore(self.settings.checkpoint_path).all(),
             recent=[],
-            job=self.job,
+            job=job,
             watches=self.watches.resolved(self.settings),
         )
 
@@ -303,44 +318,24 @@ def _sync_names(ctx: BoardContext, name: str) -> tuple[list[str] | None, JSONRes
     return [name], None
 
 
-async def _run_sync(ctx: BoardContext, label: str, names: list[str], *, backfill: bool) -> None:
-    chunks = 0
-
-    async def job(worker) -> None:
-        nonlocal chunks
-        if len(names) == 1:
-            chunks = await worker.poll_named(names[0], backfill=backfill)
-        elif backfill:
-            chunks = await worker.backfill()
-        else:
-            chunks = await worker.poll_once()
-
+async def _run_sync(ctx: BoardContext, names: list[str]) -> None:
+    queue = ctx.jobs()
+    if queue is None:
+        ctx.job = {**idle_job(), "status": "error", "error": "Elasticsearch fora"}
+        return
+    if not queue.try_lease("board"):
+        ctx.job = queue.admin_job()
+        return
     try:
-        await with_worker(ctx.settings, job, names=names)
-        ctx.job = {
-            "status": "ok",
-            "connector": label,
-            "backfill": backfill,
-            "chunks": chunks,
-            "error": None,
-        }
+        await with_worker(ctx.settings, lambda worker: worker.drain(), names=names, queue=queue)
+        ctx.job = queue.admin_job()
     except IngestConfigError as exc:
-        ctx.job = {
-            "status": "error",
-            "connector": label,
-            "backfill": backfill,
-            "chunks": chunks,
-            "error": str(exc),
-        }
+        ctx.job = {**queue.admin_job(), "status": "error", "error": str(exc)}
     except Exception as exc:
         log.exception("admin sync failed")
-        ctx.job = {
-            "status": "error",
-            "connector": label,
-            "backfill": backfill,
-            "chunks": chunks,
-            "error": str(exc),
-        }
+        ctx.job = {**queue.admin_job(), "status": "error", "error": str(exc)}
+    finally:
+        queue.release_lease("board")
 
 
 async def get_admin(request: Request) -> JSONResponse:
@@ -360,14 +355,17 @@ async def start_sync(request: Request) -> JSONResponse:
     assert names is not None
     if ctx.job.get("status") == "running":
         return JSONResponse({"error": "já tem uma atualização em curso"}, status_code=409)
-    ctx.job = {
-        "status": "running",
-        "connector": name,
-        "backfill": backfill,
-        "chunks": 0,
-        "error": None,
-    }
-    ctx._sync_task = asyncio.create_task(_run_sync(ctx, name, names, backfill=backfill))
+    queue = ctx.jobs()
+    if queue is None:
+        return JSONResponse({"error": "Elasticsearch fora"}, status_code=503)
+    busy = [item for item in names if queue.active_for(item)]
+    if busy:
+        return JSONResponse({"error": "já tem uma atualização em curso"}, status_code=409)
+    for item in names:
+        queue.create_run(item, backfill=backfill)
+    ctx.job = queue.admin_job()
+    if ctx.live_index() is not None:
+        ctx._sync_task = asyncio.create_task(_run_sync(ctx, names))
     return JSONResponse(ctx.admin_snapshot())
 
 
@@ -380,6 +378,26 @@ async def save_watches(request: Request) -> JSONResponse:
         ctx.watches.set(name, items)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse(ctx.admin_snapshot())
+
+
+async def retry_dlq(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    queue = ctx.jobs()
+    if queue is None:
+        return JSONResponse({"error": "Elasticsearch fora"}, status_code=503)
+    body = await request.json()
+    try:
+        if body.get("all"):
+            queue.retry_all_dlq()
+        else:
+            queue.retry_item(str(body.get("id") or ""))
+    except KeyError:
+        return JSONResponse({"error": "item não encontrado"}, status_code=404)
+    ctx.job = queue.admin_job()
+    names = [run.connector for run in queue.active_runs()]
+    if ctx.live_index() is not None and names:
+        ctx._sync_task = asyncio.create_task(_run_sync(ctx, names))
     return JSONResponse(ctx.admin_snapshot())
 
 
@@ -416,6 +434,7 @@ def create_app(settings: Settings) -> Starlette:
         Route("/api/expand", expand, methods=["GET"]),
         Route("/api/admin", get_admin, methods=["GET"]),
         Route("/api/admin/sync", start_sync, methods=["POST"]),
+        Route("/api/admin/dlq/retry", retry_dlq, methods=["POST"]),
         Route("/api/admin/watches", save_watches, methods=["POST"]),
         Route("/api/admin/peek", peek_watch, methods=["POST"]),
         Mount("/static", StaticFiles(directory=str(WEB)), name="static"),

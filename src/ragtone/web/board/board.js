@@ -22,6 +22,10 @@ const adminIndex = document.getElementById("admin-index");
 const adminGaps = document.getElementById("admin-gaps");
 const adminConnectors = document.getElementById("admin-connectors");
 const adminRecent = document.getElementById("admin-recent");
+const adminProgress = document.getElementById("admin-progress");
+const adminProgressFill = document.getElementById("admin-progress-fill");
+const adminProgressLabel = document.getElementById("admin-progress-label");
+const adminDlq = document.getElementById("admin-dlq");
 const syncAll = document.getElementById("sync-all");
 const adminRecentState = new Map();
 let adminConnectorRows = [];
@@ -1032,13 +1036,91 @@ function closeAdmin() {
 function jobLine(job) {
   if (!job || job.status === "idle") return "";
   if (job.status === "running") {
-    return `Atualizando ${job.connector}…`;
+    const counts = jobCounts(job);
+    return `Atualizando ${job.connector}…${counts}`;
   }
   if (job.status === "ok") {
     const extra = job.backfill ? " (desde o começo)" : "";
-    return `Pronto — ${job.chunks} chunks em ${job.connector}${extra}`;
+    const dead = job.dlq ? ` · ${job.dlq} na DLQ` : "";
+    return `Pronto — ${job.chunks} chunks em ${job.connector}${extra}${dead}`;
   }
   return job.error || "atualização falhou";
+}
+
+function jobCounts(job) {
+  if (job.total != null) return ` ${job.indexed}/${job.total}`;
+  if (job.discovered) return ` ${job.indexed}/${job.discovered}`;
+  return "";
+}
+
+function renderQueue(job) {
+  const running = job?.status === "running";
+  const percent = job?.percent;
+  if (adminProgress) {
+    adminProgress.hidden = !running && percent == null;
+  }
+  if (adminProgressFill) {
+    adminProgressFill.style.width = `${percent == null ? 0 : percent}%`;
+  }
+  if (adminProgressLabel) {
+    if (percent != null) {
+      adminProgressLabel.textContent = `${percent}%${jobCounts(job)}`;
+    } else if (running) {
+      adminProgressLabel.textContent = job.discovered
+        ? `${job.indexed} indexados · ${job.discovered} descobertos`
+        : "paginando…";
+    } else {
+      adminProgressLabel.textContent = "";
+    }
+  }
+  renderDlq(job);
+}
+
+function renderDlq(job) {
+  if (!adminDlq) return;
+  adminDlq.innerHTML = "";
+  const letters = job?.dead_letters || [];
+  if (!letters.length) return;
+  const list = document.createElement("ul");
+  list.className = "admin-dlq";
+  for (const item of letters) {
+    const row = document.createElement("li");
+    const copy = document.createElement("p");
+    const title = document.createElement("b");
+    title.textContent = `${item.connector} · ${item.ref}`;
+    const err = document.createElement("span");
+    err.textContent = item.error || "falhou";
+    copy.append(title, err);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Tentar de novo";
+    btn.addEventListener("click", () => retryDlq({ id: item.id }));
+    row.append(copy, btn);
+    list.appendChild(row);
+  }
+  adminDlq.appendChild(list);
+  if (letters.length > 1) {
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "admin-dlq-all";
+    all.textContent = "Tentar todas de novo";
+    all.addEventListener("click", () => retryDlq({ all: true }));
+    adminDlq.appendChild(all);
+  }
+}
+
+async function retryDlq(payload) {
+  const res = await fetch("/api/admin/dlq/retry", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    adminJob.textContent = data.error || "falhou";
+    return;
+  }
+  renderAdmin(data);
 }
 
 function indexLine(index) {
@@ -1388,6 +1470,7 @@ function renderConnectors(data) {
 
 function renderAdmin(data, { forceConnectors = false } = {}) {
   adminJob.textContent = jobLine(data.job);
+  renderQueue(data.job);
   adminIndex.textContent = indexLine(data.index);
   adminGaps.innerHTML = "";
   const gaps = data.gaps || [];

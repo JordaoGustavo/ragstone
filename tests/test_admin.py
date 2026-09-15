@@ -10,7 +10,7 @@ from ragtone.board_http import create_app
 from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import chat_chunk, jira_chunks
 from ragtone.embeddings import HashEmbedder
-from ragtone.ingest.base import FetchResult
+from ragtone.ingest.base import FetchResult, Page, WorkRecord
 from ragtone.ingest.worker import IngestWorker
 from ragtone.memory_index import InMemoryIndex
 from ragtone.settings import FoundationMcp, Settings
@@ -22,9 +22,21 @@ class _NamedConnector:
         self._chunks = chunks
         self._watermark = watermark
         self.calls = 0
+        self._sent = False
 
-    async def fetch(self, checkpoint: str | None, *, backfill: bool) -> FetchResult:
+    async def next_page(self, checkpoint: str | None, *, backfill: bool, cursor) -> Page:
         self.calls += 1
+        if self._sent:
+            return Page(done=True)
+        self._sent = True
+        ref = self._chunks[0].parent_id or self._chunks[0].native_id
+        return Page(
+            records=[WorkRecord(ref=ref, payload={}, watermark=self._watermark)],
+            total=1,
+            done=True,
+        )
+
+    async def materialize(self, record: WorkRecord) -> FetchResult:
         return FetchResult(chunks=self._chunks, watermark=self._watermark)
 
 

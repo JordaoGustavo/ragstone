@@ -95,8 +95,8 @@ def cmd_ingest(settings: Settings, *, backfill: bool) -> None:
     _run_worker(settings, run)
 
 
-def cmd_sync(settings: Settings) -> None:
-    _run_worker(settings, lambda worker: worker.run_loop())
+def cmd_sync(settings: Settings, *, backfill: bool = False) -> None:
+    _run_worker(settings, lambda worker: worker.run_loop(backfill_first=backfill))
 
 
 async def _list_tools(settings: Settings) -> dict[str, list[dict[str, str]]]:
@@ -147,14 +147,15 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("serve", help="Run MCP2 on 127.0.0.1 for Claude/OpenCode")
     ingest = sub.add_parser("ingest", help="Pull from Foundation MCPs once")
     ingest.add_argument("--backfill", action="store_true")
-    sub.add_parser("sync", help="Poll Foundation MCPs in a loop")
+    sync = sub.add_parser("sync", help="Poll Foundation MCPs in a loop")
+    sync.add_argument("--backfill", action="store_true")
     sub.add_parser("tools", help="List tools on configured Foundation MCPs")
     sub.add_parser("board", help="Open the thread canvas on 127.0.0.1")
     embed = sub.add_parser("embed", help="Run only the embedding HTTP server")
     embed.add_argument("--host", default=None, help="Bind address (0.0.0.0 for LAN)")
     embed.add_argument("--port", type=int, default=None)
     up = sub.add_parser("up", help="Start Elasticsearch, MCP2, board, and sync")
-    up.add_argument("--backfill", action="store_true", help="Ingest from scratch before the loop")
+    up.add_argument("--backfill", action="store_true", help="Enqueue a backfill; the board stays up")
     up.add_argument("--no-sync", action="store_true", help="Do not start the poll loop")
     up.add_argument("--no-open", action="store_true", help="Do not open the browser")
     args = parser.parse_args(argv)
@@ -170,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
     elif command == "ingest":
         cmd_ingest(settings, backfill=args.backfill)
     elif command == "sync":
-        cmd_sync(settings)
+        cmd_sync(settings, backfill=bool(getattr(args, "backfill", False)))
     elif command == "tools":
         cmd_tools(settings)
     elif command == "board":
