@@ -33,6 +33,7 @@ from ragtone.embeddings import build_embedder
 from ragtone.index import SearchIndex
 from ragtone.ingest.queue import JobQueue
 from ragtone.ingest.run import IngestConfigError, with_worker
+from ragtone.origin import Origins
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
 from ragtone.watch_preview import peek_source
@@ -63,6 +64,8 @@ class BoardContext:
         self.settings = settings
         self.store = BoardStore(settings.board_path)
         self._retrieval = retrieval
+        if self._retrieval is not None and self._retrieval.origins == Origins():
+            self._retrieval.origins = Origins.from_settings(settings)
         self._retrieval_failed = False
         self.job = idle_job()
         self._sync_task: asyncio.Task | None = None
@@ -143,6 +146,7 @@ class BoardContext:
                     url=self.settings.embed_url,
                     token=self.settings.embed_token,
                 ),
+                origins=Origins.from_settings(self.settings),
             )
             return self._retrieval
         except Exception:

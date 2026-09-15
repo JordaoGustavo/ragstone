@@ -9,6 +9,7 @@ from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import confluence_next, search_page
 from ragtone.ingest.parse import as_text, later_watermark, window_stamp
+from ragtone.origin import origin_url
 from ragtone.settings import ConfluenceSource, Settings
 from ragtone.watches import select_watch_ids
 
@@ -150,12 +151,28 @@ class ConfluenceConnector:
         )
         updated = str(detail.get("lastModified") or detail.get("updated") or record.watermark or "")
         title = as_text(detail.get("title") or page.get("title") or page_id)
+        space_raw = detail.get("space") or detail.get("spaceKey") or page.get("space")
+        if isinstance(space_raw, dict):
+            space = str(space_raw.get("key") or space_raw.get("spaceKey") or "")
+        else:
+            space = str(space_raw or "")
+        webui = ""
+        links = detail.get("_links")
+        if isinstance(links, dict):
+            webui = str(links.get("webui") or "")
         chunks = confluence_chunks(
             page_id=page_id,
             title=title,
             body=body or title,
-            url=str(detail.get("url") or detail.get("_links", {}).get("webui") or ""),
-            space=str(detail.get("space") or detail.get("spaceKey") or ""),
+            url=origin_url(
+                source="confluence",
+                native_id=page_id,
+                parent_id=page_id,
+                channel_or_space=space,
+                url=str(detail.get("url") or webui),
+                atlassian=self.cloud_id,
+            ),
+            space=space,
             updated_at=updated or None,
         )
         newest = later_watermark(record.watermark, updated)

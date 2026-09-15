@@ -404,17 +404,17 @@ async function openInspector(node) {
   document.getElementById("insp-title").textContent = node.title;
   document.getElementById("insp-excerpt").textContent = node.excerpt;
   const link = document.getElementById("insp-url");
-  if (node.url) {
-    link.hidden = false;
-    link.href = node.url;
-  } else {
-    link.hidden = true;
-  }
+  link.hidden = true;
   const body = document.getElementById("insp-body");
   body.innerHTML = "";
   const kind = node.source === "jira" ? "issue" : node.source === "confluence" ? "page" : "thread";
   const ref = node.source === "jira" ? node.parent_id || node.native_id || node.ref : node.ref;
   const data = await fetch(`/api/expand?kind=${kind}&ref=${encodeURIComponent(ref)}`).then((r) => r.json());
+  const origin = (data.items || []).find((item) => item.url)?.url || node.url;
+  if (origin) {
+    link.hidden = false;
+    link.href = origin;
+  }
   for (const item of data.items || []) {
     const p = document.createElement("p");
     p.textContent = item.text;
@@ -551,7 +551,7 @@ function dropPoint() {
 function pinHit(hit) {
   const ids = new Set(board.nodes.map((n) => n.id));
   const at = dropPoint();
-  post("/api/board/pin", { hit, x: at.x, y: at.y }).then((next) => {
+  post("/api/board/pin", { hit: { ...hit, title: hitTitle(hit) }, x: at.x, y: at.y }).then((next) => {
     setBoard(next);
     const added = next.nodes.find((n) => !ids.has(n.id));
     selectedId = added?.id || selectedId;
@@ -586,12 +586,27 @@ function hitKind(hit) {
   return bits.filter(Boolean).join(" · ");
 }
 
+function isPlaceholderTitle(hit, title) {
+  if (!title) return true;
+  if (/^\d+\.\d+$/.test(title) || /^[CGD][A-Za-z0-9]{8,}$/i.test(title)) return true;
+  const channel = String(hit.channel_or_space || "").trim();
+  if (channel && title === channel) return true;
+  if (hit.source && hit.source !== "chat") return false;
+  const aliases = new Set(
+    [hit.native_id, hit.thread_id, hit.ref]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  );
+  return aliases.has(title);
+}
+
 function hitTitle(hit) {
   const title = (hit.title || "").trim();
-  const channel = (hit.channel_or_space || "").trim();
-  if (title && title !== channel) return title;
   const text = (hit.text || "").trim();
-  if (text) return firstSentence(text);
+  if (isPlaceholderTitle(hit, title)) {
+    const sentence = firstSentence(text);
+    if (sentence) return sentence;
+  }
   return title || hit.native_id || "sem título";
 }
 

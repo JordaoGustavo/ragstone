@@ -323,3 +323,90 @@ confirmado
     thread_item = page.records[-1]
     result = asyncio.run(connector.materialize(thread_item))
     assert [chunk.text for chunk in result.chunks] == ["planning", "confirmado"]
+
+
+def test_jira_materialize_builds_browse_url_from_cloud_id() -> None:
+    caller = _Pager(
+        search=[
+            {
+                "issues": [
+                    {
+                        "key": "ABC-12",
+                        "self": "https://api.atlassian.com/ex/jira/x/rest/api/3/issue/10001",
+                        "fields": {
+                            "summary": "SSO",
+                            "updated": "2026-01-01T00:00:00.000+0000",
+                        },
+                    }
+                ],
+                "isLast": True,
+            }
+        ]
+    )
+    connector = JiraConnector(
+        JiraSource(enabled=True, projects=["ABC"]),
+        caller,
+        cloud_id="https://example.atlassian.net",
+        backfill_days=30,
+        pause=0,
+    )
+    result = asyncio.run(connector.fetch(None, backfill=True))
+    assert result.chunks[0].url == "https://example.atlassian.net/browse/ABC-12"
+
+
+def test_confluence_materialize_builds_wiki_url_from_cloud_id() -> None:
+    caller = _Pager(
+        search=[
+            {
+                "results": [
+                    {
+                        "id": "99",
+                        "title": "Runbook",
+                        "body": "x",
+                        "space": {"key": "ENG"},
+                        "lastModified": "2026-01-01",
+                        "_links": {"webui": "/wiki/spaces/ENG/pages/99"},
+                    }
+                ]
+            }
+        ]
+    )
+    connector = ConfluenceConnector(
+        ConfluenceSource(enabled=True, docs=["ENG"]),
+        caller,
+        cloud_id="https://example.atlassian.net",
+        backfill_days=30,
+        pause=0,
+    )
+    result = asyncio.run(connector.fetch(None, backfill=True))
+    assert result.chunks[0].url == "https://example.atlassian.net/wiki/spaces/ENG/pages/99"
+
+
+def test_chat_materialize_builds_slack_permalink() -> None:
+    from ragtone.ingest.chat import ChatConnector
+
+    history = {
+        "messages": """Channel: #eng (C123)
+
+=== Message from Ada Lovelace <ada@example.com> (U1) at 2026-09-15 09:47:29 -03 ===
+Message TS: 1789476449.926349
+deploy concluido
+"""
+    }
+
+    class Caller:
+        async def call_tool(self, name: str, args: dict) -> dict:
+            return history
+
+    connector = ChatConnector(
+        ChatSource(enabled=True, channels=["C123"], history_tool="history", replies_tool="replies"),
+        Caller(),
+        pause=0,
+        default_days=2,
+        workspace="https://example.slack.com",
+    )
+    page = asyncio.run(connector.next_page(None, backfill=True, cursor=None))
+    result = asyncio.run(connector.materialize(page.records[0]))
+    assert result.chunks[0].url == (
+        "https://example.slack.com/archives/C123/p1789476449926349"
+    )

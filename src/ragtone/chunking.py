@@ -5,6 +5,24 @@ import re
 from ragtone.models import Chunk
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_WHITESPACE = re.compile(r"\s+")
+_SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
+
+
+def first_sentence(text: str, max_len: int = 88) -> str:
+    compact = _WHITESPACE.sub(" ", text).strip()
+    if not compact:
+        return ""
+    if len(compact) <= max_len:
+        return compact
+    window = compact[: max_len + 1]
+    match = _SENTENCE_END.search(window)
+    if match and match.end() >= 24:
+        return compact[: match.end()].strip()
+    space = window.rfind(" ")
+    if space >= 24:
+        return compact[:space].strip()
+    return compact[:max_len].strip()
 
 
 def split_markdown_sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
@@ -118,7 +136,7 @@ def chat_chunk(
         source="chat",
         native_id=message_id,
         text=text,
-        title=channel,
+        title=first_sentence(text) or channel,
         url=url,
         parent_id=thread_id or message_id,
         thread_id=thread_id or message_id,

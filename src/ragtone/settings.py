@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     embed_token: str = ""
     data_dir: Path = Path("data")
     atlassian_cloud_id: str = ""
+    slack_workspace: str = ""
     foundation_mcps: list[FoundationMcp] = Field(default_factory=list)
     jira: JiraSource = Field(default_factory=JiraSource)
     confluence: ConfluenceSource = Field(default_factory=ConfluenceSource)

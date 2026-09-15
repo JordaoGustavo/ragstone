@@ -9,6 +9,7 @@ from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import jira_next, search_page
 from ragtone.ingest.parse import as_records, as_text, later_watermark, window_stamp
+from ragtone.origin import origin_url
 from ragtone.settings import JiraSource, Settings
 from ragtone.watches import select_watch_ids
 
@@ -171,7 +172,13 @@ class JiraConnector:
             key=key,
             summary=as_text(fields.get("summary") or detail.get("summary")),
             description=as_text(fields.get("description") or detail.get("description")),
-            url=str(detail.get("self") or detail.get("url") or ""),
+            url=origin_url(
+                source="jira",
+                native_id=key,
+                parent_id=key,
+                url=str(detail.get("url") or ""),
+                atlassian=self.cloud_id,
+            ),
             comments=comments,
             updated_at=updated or None,
             authors=tuple(

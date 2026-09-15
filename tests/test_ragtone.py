@@ -23,6 +23,17 @@ def test_chunk_ids_are_source_plus_native_id() -> None:
     assert chunk.id == "jira:ABC-1"
 
 
+def test_chat_chunk_titles_the_message_not_the_channel() -> None:
+    chunk = chat_chunk(
+        message_id="1710000000.000100",
+        text="SSO caiu no gateway de auth",
+        channel="C024BE7LT",
+    )
+    assert chunk.title == "SSO caiu no gateway de auth"
+    assert chunk.channel_or_space == "C024BE7LT"
+    assert chunk.native_id == "1710000000.000100"
+
+
 def test_confluence_splits_on_headings() -> None:
     body = "# Intro\nwelcome\n\n## Setup\ndo this\n\n## Run\ndo that\n"
     sections = split_markdown_sections(body, "Page")

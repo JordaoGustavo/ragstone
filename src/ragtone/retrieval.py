@@ -4,6 +4,7 @@ from typing import Protocol, Sequence
 
 from ragtone.embeddings import Embedder
 from ragtone.models import Filters, Hit
+from ragtone.origin import Origins, origin_for
 
 
 class ChunkStore(Protocol):
@@ -29,9 +30,20 @@ class ChunkStore(Protocol):
 
 
 class RetrievalService:
-    def __init__(self, store: ChunkStore, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        store: ChunkStore,
+        embedder: Embedder,
+        origins: Origins | None = None,
+    ) -> None:
         self.store = store
         self.embedder = embedder
+        self.origins = origins or Origins()
+
+    def _present(self, hit: Hit, *, text_limit: int | None = None) -> dict:
+        data = hit.as_dict(text_limit=text_limit)
+        data["url"] = origin_for(hit, self.origins)
+        return data
 
     def search(
         self,
@@ -49,16 +61,16 @@ class RetrievalService:
             Filters(source=source, channel=channel, since=since),
             k=k,
         )
-        return [hit.as_dict(text_limit=800) for hit in hits]
+        return [self._present(hit, text_limit=800) for hit in hits]
 
     def thread(self, thread_id: str) -> list[dict]:
-        return [hit.as_dict() for hit in self.store.by_thread(thread_id)]
+        return [self._present(hit) for hit in self.store.by_thread(thread_id)]
 
     def issue(self, key: str) -> list[dict]:
-        return [hit.as_dict() for hit in self.store.by_issue(key)]
+        return [self._present(hit) for hit in self.store.by_issue(key)]
 
     def page(self, page_id: str) -> list[dict]:
-        return [hit.as_dict() for hit in self.store.by_page(page_id)]
+        return [self._present(hit) for hit in self.store.by_page(page_id)]
 
     def recent(
         self,
@@ -77,7 +89,7 @@ class RetrievalService:
             if key in seen:
                 continue
             seen.add(key)
-            collapsed.append(hit.as_dict(text_limit=220))
+            collapsed.append(self._present(hit, text_limit=220))
             if len(collapsed) >= k:
                 break
         return collapsed

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -8,7 +9,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ragtone.chunking import first_sentence
 from ragtone.emoji import emojize
+
+_SLACK_TS = re.compile(r"^\d+\.\d+$")
+_SLACK_ID = re.compile(r"^[CGD][A-Za-z0-9]{8,}$", re.I)
+_EXCERPT_PREFIX = re.compile(r"^[\s:.\-–—/]+")
 
 
 def _uid(prefix: str) -> str:
@@ -81,10 +87,68 @@ class Board(BaseModel):
         )
 
 
+def _id_like_title(title: str) -> bool:
+    return bool(_SLACK_TS.fullmatch(title) or _SLACK_ID.fullmatch(title))
+
+
+def _placeholder_title(hit: dict[str, Any], title: str) -> bool:
+    if not title or _id_like_title(title):
+        return True
+    channel = str(hit.get("channel_or_space") or "").strip()
+    if title == channel:
+        return True
+    if str(hit.get("source") or "chat") != "chat":
+        return False
+    aliases = {
+        str(hit.get("native_id") or "").strip(),
+        str(hit.get("thread_id") or "").strip(),
+        str(hit.get("ref") or "").strip(),
+    }
+    return title in {item for item in aliases if item}
+
+
+def title_from_hit(hit: dict[str, Any], fallback: str = "") -> str:
+    title = str(hit.get("title") or "").strip()
+    if not _placeholder_title(hit, title):
+        return title
+    sentence = first_sentence(str(hit.get("text") or ""))
+    if sentence:
+        return sentence
+    return title or fallback or "sem título"
+
+
+def excerpt_from_hit(hit: dict[str, Any], title: str) -> str:
+    text = re.sub(r"\s+", " ", str(hit.get("text") or "")).strip()
+    if not text:
+        return ""
+    if text == title:
+        return ""
+    if text.startswith(title):
+        rest = _EXCERPT_PREFIX.sub("", text[len(title) :]).strip()
+        if rest:
+            text = rest
+    return text[:800]
+
+
+def present_title(node: dict[str, Any]) -> str:
+    title = str(node.get("title") or "").strip()
+    if str(node.get("source") or "") != "chat":
+        return title
+    aliases = {
+        str(node.get("native_id") or "").strip(),
+        str(node.get("thread_id") or "").strip(),
+        str(node.get("ref") or "").strip(),
+    }
+    if not _id_like_title(title) and title not in {item for item in aliases if item}:
+        return title
+    sentence = first_sentence(str(node.get("excerpt") or ""))
+    return sentence or title
+
+
 def present_board(board: Board) -> dict[str, Any]:
     data = board.model_dump()
     for node in data["nodes"]:
-        node["title"] = emojize(node["title"])
+        node["title"] = emojize(present_title(node))
         node["excerpt"] = emojize(node["excerpt"])
     return data
 
@@ -103,12 +167,13 @@ def node_from_hit(hit: dict[str, Any], x: float, y: float) -> BoardNode:
         or hit.get("id")
         or _uid("ref")
     )
+    title = title_from_hit(hit, ref)
     return BoardNode(
         id=_uid("n"),
         source=source,
         ref=ref,
-        title=str(hit.get("title") or ref),
-        excerpt=str(hit.get("text") or "")[:800],
+        title=title,
+        excerpt=excerpt_from_hit(hit, title),
         url=str(hit.get("url") or ""),
         native_id=str(hit.get("native_id") or ""),
         thread_id=str(hit.get("thread_id") or ""),

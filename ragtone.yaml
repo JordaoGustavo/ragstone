@@ -19,6 +19,8 @@ data_dir: data
 # That file is merged on top of this one automatically, like .env.
 #
 # Example ragtone.local.yaml:
+#   atlassian_cloud_id: https://example.atlassian.net
+#   slack_workspace: https://example.slack.com
 #   jira:
 #     enabled: true
 #     projects: [ABC]

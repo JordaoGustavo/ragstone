@@ -14,6 +14,7 @@ from ragtone.ingest.client import FoundationClient
 from ragtone.ingest.run import IngestConfigError, open_index, with_worker
 from ragtone.ingest.worker import IngestWorker
 from ragtone.mcp_server import build_mcp, run_mcp
+from ragtone.origin import Origins
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings, load_settings
 from ragtone.up import run_up
@@ -63,7 +64,11 @@ def cmd_serve(settings: Settings) -> None:
     if not index.ping():
         raise SystemExit(f"Elasticsearch not reachable at {settings.elasticsearch_url}")
     index.ensure_index()
-    retrieval = RetrievalService(index, _embedder(settings))
+    retrieval = RetrievalService(
+        index,
+        _embedder(settings),
+        origins=Origins.from_settings(settings),
+    )
     run_mcp(build_mcp(retrieval), settings.mcp_host, settings.mcp_port)
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 from starlette.testclient import TestClient
 
 from ragtone.board import (
+    BoardNode,
     BoardStore,
     apply_unreads,
     capture_seen,
@@ -11,6 +12,7 @@ from ragtone.board import (
     link_nodes,
     new_walk,
     pin_node,
+    present_board,
     unlink_edge,
     unpin_node,
 )
@@ -20,6 +22,78 @@ from ragtone.embeddings import HashEmbedder
 from ragtone.memory_index import InMemoryIndex
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
+
+
+def test_pinning_a_slack_message_uses_the_text_as_title() -> None:
+    board = empty_board()
+    pin_node(
+        board,
+        {
+            "source": "chat",
+            "title": "C024BE7LT",
+            "channel_or_space": "C024BE7LT",
+            "text": "SSO caiu no gateway",
+            "thread_id": "1710000000.000100",
+            "native_id": "1710000000.000100",
+        },
+    )
+    node = board.nodes[0]
+    assert node.title == "SSO caiu no gateway"
+    assert node.excerpt == ""
+
+
+def test_pinning_a_long_slack_message_keeps_the_rest_as_excerpt() -> None:
+    board = empty_board()
+    pin_node(
+        board,
+        {
+            "source": "chat",
+            "title": "C024BE7LT",
+            "channel_or_space": "C024BE7LT",
+            "text": (
+                "SSO caiu no gateway de auth depois do deploy. "
+                "O timeout aparece no load balancer da borda e ninguem consegue logar no console."
+            ),
+            "thread_id": "1710000000.000100",
+            "native_id": "1710000000.000100",
+        },
+    )
+    node = board.nodes[0]
+    assert node.title == "SSO caiu no gateway de auth depois do deploy."
+    assert node.excerpt.startswith("O timeout aparece")
+
+
+def test_pinning_a_slack_message_without_title_does_not_use_the_timestamp() -> None:
+    board = empty_board()
+    pin_node(
+        board,
+        {
+            "source": "chat",
+            "text": "timeout no gateway",
+            "thread_id": "1710000000.000100",
+            "native_id": "1710000000.000100",
+        },
+    )
+    assert board.nodes[0].title == "timeout no gateway"
+    assert board.nodes[0].excerpt == ""
+
+
+def test_present_board_rewrites_slack_timestamp_titles() -> None:
+    board = empty_board()
+    board.nodes.append(
+        BoardNode(
+            id="n1",
+            source="chat",
+            ref="1710000000.000100",
+            title="1710000000.000100",
+            excerpt="SSO caiu no gateway",
+            native_id="1710000000.000100",
+            thread_id="1710000000.000100",
+        )
+    )
+    view = present_board(board)
+    assert view["nodes"][0]["title"] == "SSO caiu no gateway"
+    assert board.nodes[0].title == "1710000000.000100"
 
 
 def test_pinning_drops_a_card_without_a_rope() -> None:
@@ -119,6 +193,24 @@ def test_board_http_persists_pin(tmp_path: Path) -> None:
     again = client.get("/api/board")
     assert again.json()["nodes"][0]["title"] == "VPN"
     assert again.json()["edges"] == []
+
+
+def test_board_http_pins_slack_text_as_title(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    pinned = client.post(
+        "/api/board/pin",
+        json={
+            "hit": {
+                "source": "chat",
+                "title": "C024BE7LT",
+                "channel_or_space": "C024BE7LT",
+                "text": "SSO caiu no gateway",
+                "thread_id": "1710000000.000100",
+            }
+        },
+    )
+    assert pinned.json()["nodes"][0]["title"] == "SSO caiu no gateway"
 
 
 def test_board_http_renders_emoji_shortcodes_on_cards(tmp_path: Path) -> None:
@@ -222,6 +314,7 @@ def test_board_page_opens_a_finder_for_index_hits(tmp_path: Path) -> None:
     assert "node.unread" in js
     assert "/api/board/seen" in js
     assert "refreshUnreads" in js
+    assert "item.url" in js
     empty = RetrievalService(InMemoryIndex(), HashEmbedder(8))
     client = TestClient(create_app(settings, retrieval=empty))
     data = client.get("/api/recent").json()
@@ -369,6 +462,38 @@ def test_board_http_search_returns_hits(tmp_path: Path) -> None:
     body = found.json()
     assert body["ok"] is True
     assert body["hits"][0]["native_id"] == "ABC-12"
+
+
+def test_board_http_search_opens_jira_from_cloud_id(tmp_path: Path) -> None:
+    docs = [
+        *jira_chunks(key="ABC-12", summary="SSO timeout", description="gateway"),
+        *confluence_chunks(page_id="99", title="Runbook", body="restart sso", space="ENG"),
+        chat_chunk(
+            message_id="1710000000.000100",
+            text="sso caiu",
+            channel="C024BE7LT",
+            thread_id="1710000000.000100",
+        ),
+    ]
+    embedder = HashEmbedder(8)
+    store = InMemoryIndex()
+    store.upsert(docs, embedder.embed([chunk.text for chunk in docs]))
+    settings = Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        atlassian_cloud_id="https://example.atlassian.net",
+        slack_workspace="https://example.slack.com",
+    )
+    retrieval = RetrievalService(store, embedder)
+    client = TestClient(create_app(settings, retrieval=retrieval))
+    jira = client.get("/api/search", params={"q": "ABC-12"}).json()["hits"][0]
+    assert jira["url"] == "https://example.atlassian.net/browse/ABC-12"
+    page = client.get("/api/expand", params={"kind": "page", "ref": "99"}).json()["items"][0]
+    assert page["url"] == "https://example.atlassian.net/wiki/spaces/ENG/pages/99"
+    thread = client.get(
+        "/api/expand", params={"kind": "thread", "ref": "1710000000.000100"}
+    ).json()["items"][0]
+    assert thread["url"] == "https://example.slack.com/archives/C024BE7LT/p1710000000000100"
 
 
 def test_board_http_search_does_not_500_when_index_rejects(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from ragtone.ingest.base import FetchResult, Page, WorkRecord, fetch_all
 from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import chat_next, paged_records, search_page
 from ragtone.ingest.parse import as_text, later_watermark, window_stamp
+from ragtone.origin import origin_url
 from ragtone.settings import ChatSource, Settings
 from ragtone.watches import select_watch_ids
 
@@ -81,12 +82,14 @@ class ChatConnector:
         pause: float,
         default_days: int,
         checkpoints: CheckpointStore | None = None,
+        workspace: str = "",
     ) -> None:
         self.source = source
         self.caller = caller
         self.pause = pause
         self.default_days = default_days
         self.checkpoints = checkpoints
+        self.workspace = workspace
 
     def _oldest(self, channel: str, *, backfill: bool, backfill_days: int | None = None) -> str:
         key = f"chat:{channel}"
@@ -207,7 +210,14 @@ class ChatConnector:
                     text=as_text(message.get("text") or message.get("body")),
                     channel=channel,
                     thread_id=thread_id,
-                    url=str(message.get("permalink") or message.get("url") or ""),
+                    url=origin_url(
+                        source="chat",
+                        native_id=message_id,
+                        thread_id=thread_id,
+                        channel_or_space=channel,
+                        url=str(message.get("permalink") or message.get("url") or ""),
+                        slack=self.workspace,
+                    ),
                     created_at=str(message.get("ts") or message.get("created") or "") or None,
                     author=as_text(message.get("user") or message.get("author") or ""),
                 )
@@ -228,7 +238,14 @@ class ChatConnector:
             text=as_text(message.get("text") or message.get("body")),
             channel=channel,
             thread_id=thread_id,
-            url=str(message.get("permalink") or message.get("url") or ""),
+            url=origin_url(
+                source="chat",
+                native_id=message_id,
+                thread_id=thread_id,
+                channel_or_space=channel,
+                url=str(message.get("permalink") or message.get("url") or ""),
+                slack=self.workspace,
+            ),
             created_at=str(message.get("ts") or message.get("created") or "") or None,
             author=as_text(message.get("user") or message.get("author") or ""),
         )
@@ -252,4 +269,5 @@ def build_chat(
         pause=settings.mcp_pause_seconds,
         default_days=settings.backfill_days,
         checkpoints=checkpoints,
+        workspace=settings.slack_workspace,
     )
