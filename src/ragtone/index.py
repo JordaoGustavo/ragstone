@@ -67,15 +67,8 @@ def identifier_clauses(query: str) -> list[dict[str, Any]]:
     return clauses
 
 
-def hybrid_search_body(
-    *,
-    query: str,
-    vector: Sequence[float],
-    filters: Filters,
-    k: int,
-) -> dict[str, Any]:
-    clauses = filter_clauses(filters)
-    should: list[dict[str, Any]] = [
+def _lexical_should(query: str) -> list[dict[str, Any]]:
+    return [
         {
             "multi_match": {
                 "query": query,
@@ -87,24 +80,53 @@ def hybrid_search_body(
             }
         },
         *identifier_clauses(query),
-        {
-            "knn": {
-                "field": EMBEDDING_FIELD,
-                "query_vector": list(vector),
-                "k": k,
-                "num_candidates": max(k * 8, 50),
-            }
-        },
     ]
+
+
+def _bool_query(should: list[dict[str, Any]], filters: Filters) -> dict[str, Any]:
     body_query: dict[str, Any] = {
         "bool": {
             "should": should,
             "minimum_should_match": 1,
         }
     }
+    clauses = filter_clauses(filters)
     if clauses:
         body_query["bool"]["filter"] = clauses
-    return {"size": k, "query": body_query}
+    return body_query
+
+
+def lexical_search_body(
+    *,
+    query: str,
+    filters: Filters,
+    k: int,
+) -> dict[str, Any]:
+    """Spotlight path: BM25 + identifiers, no kNN."""
+    return {"size": k, "query": _bool_query(_lexical_should(query), filters)}
+
+
+def hybrid_search_body(
+    *,
+    query: str,
+    vector: Sequence[float],
+    filters: Filters,
+    k: int,
+) -> dict[str, Any]:
+    """MCP path: kNN-first hybrid with lexical identifiers as a backstop."""
+    should: list[dict[str, Any]] = [
+        {
+            "knn": {
+                "field": EMBEDDING_FIELD,
+                "query_vector": list(vector),
+                "k": k,
+                "num_candidates": max(k * 8, 50),
+                "boost": 2.0,
+            }
+        },
+        *_lexical_should(query),
+    ]
+    return {"size": k, "query": _bool_query(should, filters)}
 
 
 def mappings(dims: int) -> dict[str, Any]:
@@ -195,20 +217,20 @@ class SearchIndex:
         k: int = 8,
     ) -> list[Hit]:
         body = hybrid_search_body(query=query, vector=vector, filters=filters, k=k)
-        response = self.es.options(request_timeout=SEARCH_TIMEOUT).search(
-            index=self.index_name,
-            size=body["size"],
-            query=body["query"],
-            source_excludes=[EMBEDDING_FIELD],
+        return self._query_hits(body)
+
+    def lexical_search(self, query: str, filters: Filters, k: int = 8) -> list[Hit]:
+        return self._query_hits(lexical_search_body(query=query, filters=filters, k=k))
+
+    def by_ids(self, ids: Sequence[str]) -> list[Hit]:
+        if not ids:
+            return []
+        return self._query_hits(
+            {
+                "size": len(ids),
+                "query": {"ids": {"values": list(ids)}},
+            }
         )
-        return [
-            hit_from_source(
-                str(raw["_id"]),
-                float(raw.get("_score") or 0),
-                raw.get("_source") or {},
-            )
-            for raw in response["hits"]["hits"]
-        ]
 
     def by_thread(self, thread_id: str) -> list[Hit]:
         return self._term("thread_id", thread_id)
@@ -271,13 +293,24 @@ class SearchIndex:
         filters: list[dict[str, Any]] = [{"term": {field: value}}]
         if extra:
             filters.append(extra)
-        response = self.es.search(
-            index=self.index_name,
-            size=100,
-            query={"bool": {"filter": filters}},
-            sort=[{"updated_at": {"order": "asc", "unmapped_type": "date"}}],
-            source_excludes=[EMBEDDING_FIELD],
+        return self._query_hits(
+            {
+                "size": 100,
+                "query": {"bool": {"filter": filters}},
+                "sort": [{"updated_at": {"order": "asc", "unmapped_type": "date"}}],
+            }
         )
+
+    def _query_hits(self, body: dict[str, Any]) -> list[Hit]:
+        kwargs: dict[str, Any] = {
+            "index": self.index_name,
+            "size": body["size"],
+            "query": body["query"],
+            "source_excludes": [EMBEDDING_FIELD],
+        }
+        if "sort" in body:
+            kwargs["sort"] = body["sort"]
+        response = self.es.options(request_timeout=SEARCH_TIMEOUT).search(**kwargs)
         return [
             hit_from_source(
                 str(raw["_id"]),

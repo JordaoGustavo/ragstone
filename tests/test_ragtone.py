@@ -7,7 +7,7 @@ from pathlib import Path
 from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import chat_chunk, confluence_chunks, jira_chunks, split_markdown_sections
 from ragtone.embeddings import HashEmbedder
-from ragtone.index import hybrid_search_body, identifier_values
+from ragtone.index import hybrid_search_body, identifier_values, lexical_search_body
 from ragtone.ingest.base import FetchResult, Page, WorkRecord
 from ragtone.ingest.parse import as_records, as_text
 from ragtone.ingest.worker import IngestWorker
@@ -90,6 +90,25 @@ def test_hybrid_body_uses_knn_query_and_filters() -> None:
     knn = next(item["knn"] for item in query["should"] if "knn" in item)
     assert knn["field"] == "embedding"
     assert knn["k"] == 8
+    assert knn["boost"] == 2.0
+    match = next(item["multi_match"] for item in query["should"] if "multi_match" in item)
+    assert "title^2" in match["fields"]
+    assert any(
+        item.get("term", {}).get("native_id", {}).get("value") == "ABC-9"
+        for item in query["should"]
+    )
+
+
+def test_lexical_body_skips_knn() -> None:
+    body = lexical_search_body(
+        query="login timeout ABC-9",
+        filters=Filters(source="jira", channel="eng", since="2026-01-01"),
+        k=12,
+    )
+    assert "retriever" not in body
+    query = body["query"]["bool"]
+    assert query["filter"][0] == {"term": {"source": "jira"}}
+    assert all("knn" not in item for item in query["should"])
     match = next(item["multi_match"] for item in query["should"] if "multi_match" in item)
     assert "title^2" in match["fields"]
     assert any(
@@ -271,9 +290,7 @@ def test_retrieval_search_finds_issue_by_key() -> None:
     assert hits[0]["native_id"] == "ABC-12"
 
 
-def test_retrieval_search_returns_roots_not_chunks() -> None:
-    embedder = HashEmbedder(32)
-    store = InMemoryIndex()
+def _mixed_search_docs():
     parent = chat_chunk(
         message_id="1.0",
         text="what broke?",
@@ -299,16 +316,66 @@ def test_retrieval_search_returns_roots_not_chunks() -> None:
         description="Users cannot sign in",
         comments=[{"id": "c1", "body": "VPN tunnel is down", "author": "ana"}],
     )
-    docs = [parent, reply, *pages, *issue]
+    return [parent, reply, *pages, *issue]
+
+
+class _RecordingIndex(InMemoryIndex):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def search(self, query, vector, filters, k=8):
+        self.calls.append("semantic")
+        return super().search(query, vector, filters, k)
+
+    def lexical_search(self, query, filters, k=8):
+        self.calls.append("lexical")
+        return super().lexical_search(query, filters, k)
+
+
+class _BoomEmbedder:
+    dims = 32
+
+    def embed(self, texts):
+        raise AssertionError("spotlight must not embed")
+
+
+def test_spotlight_search_returns_roots_not_chunks() -> None:
+    embedder = HashEmbedder(32)
+    store = InMemoryIndex()
+    docs = _mixed_search_docs()
+    store.upsert(docs, embedder.embed([chunk.text for chunk in docs]))
+    service = RetrievalService(store, _BoomEmbedder())
+    thread = service.spotlight("SSO gateway exploded", source="chat")
+    assert [hit["native_id"] for hit in thread] == ["1.0"]
+    page = service.spotlight("restart sso", source="confluence")
+    assert [hit["native_id"] for hit in page] == ["99"]
+    assert page[0]["title"] == "Runbook"
+    ticket = service.spotlight("VPN tunnel", source="jira")
+    assert [hit["native_id"] for hit in ticket] == ["ABC-9"]
+
+
+def test_mcp_search_returns_matching_chunks() -> None:
+    embedder = HashEmbedder(32)
+    store = InMemoryIndex()
+    docs = _mixed_search_docs()
     store.upsert(docs, embedder.embed([chunk.text for chunk in docs]))
     service = RetrievalService(store, embedder)
     thread = service.search("SSO gateway exploded", source="chat")
-    assert [hit["native_id"] for hit in thread] == ["1.0"]
-    page = service.search("restart sso", source="confluence")
-    assert [hit["native_id"] for hit in page] == ["99"]
-    assert page[0]["title"] == "Runbook"
+    assert thread[0]["native_id"] == "1.1"
     ticket = service.search("VPN tunnel", source="jira")
-    assert [hit["native_id"] for hit in ticket] == ["ABC-9"]
+    assert ticket[0]["native_id"] == "ABC-9:comment:c1"
+
+
+def test_spotlight_and_mcp_use_different_queries() -> None:
+    embedder = HashEmbedder(32)
+    store = _RecordingIndex()
+    docs = _mixed_search_docs()
+    store.upsert(docs, embedder.embed([chunk.text for chunk in docs]))
+    service = RetrievalService(store, embedder)
+    service.spotlight("SSO gateway exploded", source="chat")
+    service.search("SSO gateway exploded", source="chat")
+    assert store.calls == ["lexical", "semantic"]
 
 
 def test_retrieval_expands_thread_and_page() -> None:
@@ -353,15 +420,22 @@ def _tool_text(result) -> str:
 
 def test_mcp_tools_search_and_issue_return_json() -> None:
     embedder = HashEmbedder(16)
-    store = InMemoryIndex()
-    chunks = jira_chunks(key="ABC-7", summary="VPN down", description="No tunnel")
+    store = _RecordingIndex()
+    chunks = jira_chunks(
+        key="ABC-7",
+        summary="VPN down",
+        description="No tunnel",
+        comments=[{"id": "c1", "body": "VPN tunnel is down", "author": "ana"}],
+    )
     store.upsert(chunks, embedder.embed([c.text for c in chunks]))
     mcp = build_mcp(RetrievalService(store, embedder))
     tools = {tool.name for tool in asyncio.run(mcp.list_tools())}
     assert tools >= {"search", "thread", "issue", "page"}
     search = asyncio.run(mcp.call_tool("search", {"query": "VPN tunnel"}))
     issue = asyncio.run(mcp.call_tool("issue", {"key": "ABC-7"}))
-    assert "ABC-7" in _tool_text(search)
+    text = _tool_text(search)
+    assert "ABC-7:comment:c1" in text
+    assert store.calls == ["semantic"]
     assert "VPN down" in _tool_text(issue)
 
 

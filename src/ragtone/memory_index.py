@@ -17,6 +17,20 @@ def _matches(doc: dict, filters: Filters) -> bool:
     return True
 
 
+def _haystack(doc: dict) -> str:
+    return " ".join(
+        str(doc.get(field) or "")
+        for field in (
+            "title",
+            "text",
+            "native_id",
+            "parent_id",
+            "thread_id",
+            "channel_or_space",
+        )
+    )
+
+
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
@@ -43,22 +57,32 @@ class InMemoryIndex:
             if not _matches(doc, filters):
                 continue
             dense = _cosine(vector, self._vectors[doc_id])
-            haystack = " ".join(
-                str(doc.get(field) or "")
-                for field in (
-                    "title",
-                    "text",
-                    "native_id",
-                    "parent_id",
-                    "thread_id",
-                    "channel_or_space",
-                )
-            )
-            lexical = lexical_score(query, haystack)
+            lexical = lexical_score(query, _haystack(doc))
             score = 0.6 * dense + 0.4 * lexical
             scored.append(hit_from_source(doc_id, score, doc))
         scored.sort(key=lambda hit: hit.score, reverse=True)
         return scored[:k]
+
+    def lexical_search(self, query: str, filters: Filters, k: int = 8) -> list[Hit]:
+        scored: list[Hit] = []
+        for doc_id, doc in self._docs.items():
+            if not _matches(doc, filters):
+                continue
+            lexical = lexical_score(query, _haystack(doc))
+            if lexical <= 0:
+                continue
+            scored.append(hit_from_source(doc_id, lexical, doc))
+        scored.sort(key=lambda hit: hit.score, reverse=True)
+        return scored[:k]
+
+    def by_ids(self, ids: Sequence[str]) -> list[Hit]:
+        hits: list[Hit] = []
+        for doc_id in ids:
+            doc = self._docs.get(doc_id)
+            if doc is None:
+                continue
+            hits.append(hit_from_source(doc_id, 1.0, doc))
+        return hits
 
     def by_thread(self, thread_id: str) -> list[Hit]:
         return self._where(lambda doc: doc.get("thread_id") == thread_id)

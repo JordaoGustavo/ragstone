@@ -21,6 +21,10 @@ def is_root(hit: Hit) -> bool:
     return bool(thread) and hit.native_id == thread
 
 
+def root_id(hit: Hit) -> str:
+    return f"{hit.source}:{root_ref(hit)}"
+
+
 class ChunkStore(Protocol):
     def upsert(self, chunks, vectors) -> None: ...
 
@@ -31,6 +35,10 @@ class ChunkStore(Protocol):
         filters: Filters,
         k: int = 8,
     ) -> list[Hit]: ...
+
+    def lexical_search(self, query: str, filters: Filters, k: int = 8) -> list[Hit]: ...
+
+    def by_ids(self, ids: Sequence[str]) -> list[Hit]: ...
 
     def by_thread(self, thread_id: str) -> list[Hit]: ...
 
@@ -59,33 +67,24 @@ class RetrievalService:
         data["url"] = origin_for(hit, self.origins)
         return data
 
-    def _root_of(self, hit: Hit) -> Hit:
-        if is_root(hit):
-            return hit
-        members: list[Hit] = []
-        if hit.source == "chat" and hit.thread_id:
-            members = self.store.by_thread(hit.thread_id)
-        elif hit.source == "jira" and hit.parent_id:
-            members = self.store.by_issue(hit.parent_id)
-        elif hit.source == "confluence" and hit.parent_id:
-            members = self.store.by_page(hit.parent_id)
-        for item in members:
-            if is_root(item):
-                return item
-        return hit
-
     def _collapse_roots(self, hits: Sequence[Hit], k: int) -> list[Hit]:
-        seen: set[str] = set()
-        collapsed: list[Hit] = []
+        ordered: list[str] = []
+        first: dict[str, Hit] = {}
+        present: dict[str, Hit] = {}
         for hit in hits:
-            key = f"{hit.source}:{root_ref(hit)}"
-            if key in seen:
+            key = root_id(hit)
+            if is_root(hit):
+                present[key] = hit
+            if key in first:
                 continue
-            seen.add(key)
-            collapsed.append(self._root_of(hit))
-            if len(collapsed) >= k:
+            first[key] = hit
+            ordered.append(key)
+            if len(ordered) >= k:
                 break
-        return collapsed
+        missing = [key for key in ordered if key not in present]
+        if missing:
+            present.update({hit.id: hit for hit in self.store.by_ids(missing)})
+        return [present.get(key) or first[key] for key in ordered]
 
     def search(
         self,
@@ -96,10 +95,28 @@ class RetrievalService:
         since: str | None = None,
         k: int = 8,
     ) -> list[dict]:
+        """MCP path: embed the query and rank matching chunks by kNN/hybrid."""
         vector = self.embedder.embed([query])[0]
         hits = self.store.search(
             query,
             vector,
+            Filters(source=source, channel=channel, since=since),
+            k=k,
+        )
+        return [self._present(hit, text_limit=800) for hit in hits]
+
+    def spotlight(
+        self,
+        query: str,
+        *,
+        source: str | None = None,
+        channel: str | None = None,
+        since: str | None = None,
+        k: int = 12,
+    ) -> list[dict]:
+        """Spotlight path: lexical search collapsed to pages, issues, and threads."""
+        hits = self.store.lexical_search(
+            query,
             Filters(source=source, channel=channel, since=since),
             k=max(k * 4, 32),
         )

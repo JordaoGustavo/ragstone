@@ -35,6 +35,8 @@ def test_live_hybrid_search_finds_issue_key_without_rrf() -> None:
     index.upsert([chunk], embedder.embed([chunk.text]))
     hits = index.search("ABC-12", embedder.embed(["ABC-12"])[0], Filters(), k=8)
     assert [hit.native_id for hit in hits] == ["ABC-12"]
+    lexical = index.lexical_search("ABC-12", Filters(), k=8)
+    assert [hit.native_id for hit in lexical] == ["ABC-12"]
     filtered = index.search(
         "SSO",
         embedder.embed(["SSO"])[0],

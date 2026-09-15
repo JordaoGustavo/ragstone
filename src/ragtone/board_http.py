@@ -312,7 +312,7 @@ async def search(request: Request) -> JSONResponse:
     if not query:
         return JSONResponse({"ok": True, "hits": []})
     try:
-        hits = retrieval.search(query, source=source, k=12)
+        hits = retrieval.spotlight(query, source=source, k=12)
     except Exception:
         log.exception("search failed")
         return JSONResponse({"ok": False, "reason": "search failed", "hits": []})

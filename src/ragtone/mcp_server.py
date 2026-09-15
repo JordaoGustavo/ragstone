@@ -21,7 +21,7 @@ def build_mcp(retrieval: RetrievalService) -> MCPServer:
         since: str | None = None,
         k: int = 8,
     ) -> str:
-        """Hybrid search over the local Jira, Confluence, and chat index."""
+        """Semantic search over the local Jira, Confluence, and chat index."""
         hits = retrieval.search(
             query, source=source, channel=channel, since=since, k=k
         )

@@ -530,9 +530,43 @@ def test_board_http_search_opens_jira_from_cloud_id(tmp_path: Path) -> None:
     assert thread["url"] == "https://example.slack.com/archives/C024BE7LT/p1710000000000100"
 
 
+def test_board_http_search_does_not_embed(tmp_path: Path) -> None:
+    class _BoomEmbedder:
+        dims = 8
+
+        def embed(self, texts):
+            raise AssertionError("spotlight must not embed")
+
+    docs = [
+        chat_chunk(
+            message_id="1.0",
+            text="what broke?",
+            channel="eng",
+            thread_id="1.0",
+            created_at="1.0",
+        ),
+        chat_chunk(
+            message_id="1.1",
+            text="the SSO gateway exploded",
+            channel="eng",
+            thread_id="1.0",
+            created_at="1.1",
+        ),
+    ]
+    store = InMemoryIndex()
+    store.upsert(docs, HashEmbedder(8).embed([chunk.text for chunk in docs]))
+    retrieval = RetrievalService(store, _BoomEmbedder())
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings, retrieval=retrieval))
+    thread = client.get(
+        "/api/search", params={"q": "SSO gateway", "source": "chat"}
+    ).json()["hits"]
+    assert [hit["native_id"] for hit in thread] == ["1.0"]
+
+
 def test_board_http_search_does_not_500_when_index_rejects(tmp_path: Path) -> None:
     class _BoomStore:
-        def search(self, *args, **kwargs):
+        def lexical_search(self, *args, **kwargs):
             raise RuntimeError("current license is non-compliant for [Reciprocal Rank Fusion (RRF)]")
 
     settings = Settings(data_dir=tmp_path, embedder="hash")
