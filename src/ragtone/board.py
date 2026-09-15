@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,9 @@ class BoardNode(BaseModel):
     parent_id: str = ""
     x: float = 0
     y: float = 0
+    seen_stamp: str = ""
+    seen_count: int | None = None
+    unread: bool = False
 
 
 class BoardEdge(BaseModel):
@@ -101,7 +105,80 @@ def node_from_hit(hit: dict[str, Any], x: float, y: float) -> BoardNode:
         parent_id=str(hit.get("parent_id") or ""),
         x=x,
         y=y,
+        seen_stamp=_stamp(hit.get("updated_at")),
+        seen_count=None,
+        unread=False,
     )
+
+
+def entity_key(node: BoardNode) -> tuple[str, str] | None:
+    if node.source == "jira":
+        ref = node.parent_id or node.native_id or node.ref
+        return ("issue", ref) if ref else None
+    if node.source == "confluence":
+        ref = node.parent_id or node.ref
+        return ("page", ref) if ref else None
+    ref = node.thread_id or node.ref
+    if not ref or str(ref).startswith("local:"):
+        return None
+    return ("thread", ref)
+
+
+def _stamp(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def fingerprint(hits: list[dict[str, Any]]) -> tuple[str, int]:
+    stamp = ""
+    for hit in hits:
+        value = _stamp(hit.get("updated_at"))
+        if value > stamp:
+            stamp = value
+    return stamp, len(hits)
+
+
+def capture_seen(node: BoardNode, hits: list[dict[str, Any]]) -> BoardNode:
+    stamp, count = fingerprint(hits)
+    if hits:
+        node.seen_stamp = stamp
+        node.seen_count = count
+    node.unread = False
+    return node
+
+
+def apply_unreads(
+    board: Board,
+    lookup: Callable[[BoardNode], list[dict[str, Any]]],
+) -> bool:
+    changed = False
+    for node in board.nodes:
+        if entity_key(node) is None:
+            if node.unread:
+                node.unread = False
+                changed = True
+            continue
+        hits = lookup(node)
+        if not hits:
+            continue
+        stamp, count = fingerprint(hits)
+        if not node.seen_stamp and node.seen_count is None:
+            node.seen_stamp = stamp
+            node.seen_count = count
+            node.unread = False
+            changed = True
+            continue
+        unread = stamp > (node.seen_stamp or "") or (
+            node.seen_count is not None and count > node.seen_count
+        )
+        if node.seen_count is None and not unread:
+            node.seen_count = count
+            changed = True
+        if node.unread != unread:
+            node.unread = unread
+            changed = True
+    return changed
 
 
 def _slot(board: Board) -> tuple[float, float]:

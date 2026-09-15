@@ -276,7 +276,9 @@ function renderNodes() {
   nodesEl.innerHTML = "";
   for (const node of board.nodes) {
     const el = document.createElement("article");
-    el.className = `node ${node.source}${node.id === selectedId ? " selected" : ""}`;
+    el.className = `node ${node.source}${node.id === selectedId ? " selected" : ""}${
+      node.unread ? " unread" : ""
+    }`;
     el.style.left = `${node.x}px`;
     el.style.top = `${node.y}px`;
     el.dataset.id = node.id;
@@ -288,12 +290,16 @@ function renderNodes() {
       </header>
       <h3></h3>
       <p></p>
+      ${node.unread ? `<span class="node-badge" aria-label="Novidade"></span>` : ""}
       <button type="button" class="drop-card" aria-label="Tirar do canvas">×</button>
       <button type="button" class="port in" aria-hidden="true"></button>
       <button type="button" class="port out" aria-label="Arrasta até outro card para ligar" title="Arrasta até outro card para ligar"></button>
     `;
     el.querySelector("h3").textContent = node.title;
     el.querySelector("p").textContent = node.excerpt.slice(0, 140);
+    if (node.unread) {
+      el.setAttribute("aria-label", `${node.title}, novidade`);
+    }
     el.addEventListener("pointerdown", onNodeDown);
     el.querySelector(".drop-card").addEventListener("pointerdown", (event) => {
       event.stopPropagation();
@@ -380,6 +386,13 @@ function focusNode(id) {
 
 async function openInspector(node) {
   selectedId = node.id;
+  if (node.unread) {
+    node.unread = false;
+    renderNodes();
+  }
+  post("/api/board/seen", { id: node.id }).then((next) => {
+    if (next?.nodes) setBoard(next);
+  });
   inspector.hidden = false;
   document.getElementById("insp-source").textContent = node.source;
   document.getElementById("insp-title").textContent = node.title;
@@ -1468,7 +1481,15 @@ function renderConnectors(data) {
   }
 }
 
+let lastJobStatus = "";
+
 function renderAdmin(data, { forceConnectors = false } = {}) {
+  const jobStatus = data.job?.status || "idle";
+  if (lastJobStatus === "running" && jobStatus !== "running") {
+    refreshUnreads();
+    loadRecents();
+  }
+  lastJobStatus = jobStatus;
   adminJob.textContent = jobLine(data.job);
   renderQueue(data.job);
   adminIndex.textContent = indexLine(data.index);
@@ -1548,6 +1569,25 @@ document.getElementById("open-admin").addEventListener("click", openAdmin);
 document.getElementById("close-admin").addEventListener("click", closeAdmin);
 syncAll.addEventListener("click", () => requestSync("all"));
 
+function paintUnreads(nodes) {
+  if (!board || !nodes) return;
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  let changed = false;
+  for (const node of board.nodes) {
+    const fresh = byId.get(node.id);
+    if (!fresh || Boolean(fresh.unread) === Boolean(node.unread)) continue;
+    node.unread = Boolean(fresh.unread);
+    changed = true;
+  }
+  if (changed) renderNodes();
+}
+
+async function refreshUnreads() {
+  if (!board || drag || pan || linkingFrom) return;
+  const next = await fetch("/api/board").then((r) => r.json());
+  paintUnreads(next.nodes);
+}
+
 fetch("/api/board")
   .then((r) => r.json())
   .then((next) => {
@@ -1555,3 +1595,8 @@ fetch("/api/board")
     requestAnimationFrame(tick);
     loadRecents();
   });
+
+setInterval(() => {
+  if (document.hidden || !board) return;
+  refreshUnreads();
+}, 20000);

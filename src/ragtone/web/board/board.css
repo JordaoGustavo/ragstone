@@ -492,6 +492,31 @@ body.finder-open .spot-launch {
   z-index: 3;
 }
 
+.node-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e24b3a;
+  border: 2px solid #faf9f6;
+  box-shadow: 0 1px 4px rgba(26, 23, 20, 0.35);
+  z-index: 4;
+  pointer-events: none;
+  animation: badge-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+}
+
 .node .drop-card:hover,
 .node.selected .drop-card {
   color: var(--copper);

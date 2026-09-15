@@ -12,7 +12,21 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from ragtone.admin import idle_job, snapshot
-from ragtone.board import BoardStore, delete_walk, link_nodes, move_node, new_walk, pin_node, unlink_edge, unpin_node
+from ragtone.board import (
+    Board,
+    BoardNode,
+    BoardStore,
+    apply_unreads,
+    capture_seen,
+    delete_walk,
+    entity_key,
+    link_nodes,
+    move_node,
+    new_walk,
+    pin_node,
+    unlink_edge,
+    unpin_node,
+)
 from ragtone.checkpoints import CheckpointStore
 from ragtone.embeddings import build_embedder
 from ragtone.index import SearchIndex
@@ -34,10 +48,14 @@ def _opt_float(value: object) -> float | None:
 
 
 class BoardContext:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        retrieval: RetrievalService | None = None,
+    ) -> None:
         self.settings = settings
         self.store = BoardStore(settings.board_path)
-        self._retrieval: RetrievalService | None = None
+        self._retrieval = retrieval
         self._retrieval_failed = False
         self.job = idle_job()
         self._sync_task: asyncio.Task | None = None
@@ -129,12 +147,42 @@ def _ctx(request: Request) -> BoardContext:
     return request.app.state.ctx
 
 
+def hits_for_node(retrieval: RetrievalService, node: BoardNode) -> list[dict]:
+    key = entity_key(node)
+    if key is None:
+        return []
+    kind, ref = key
+    if kind == "issue":
+        return retrieval.issue(ref)
+    if kind == "page":
+        return retrieval.page(ref)
+    return retrieval.thread(ref)
+
+
+def _lookup(ctx: BoardContext, node: BoardNode) -> list[dict]:
+    retrieval = ctx.retrieval()
+    if retrieval is None:
+        return []
+    return hits_for_node(retrieval, node)
+
+
+def _refresh_unreads(ctx: BoardContext, board: Board, *, persist: bool = True) -> Board:
+    changed = apply_unreads(board, lambda node: _lookup(ctx, node))
+    if persist and changed:
+        ctx.store.save(board)
+    return board
+
+
+def _load_board(ctx: BoardContext) -> Board:
+    return _refresh_unreads(ctx, ctx.store.load())
+
+
 async def index(_request: Request) -> FileResponse:
     return FileResponse(WEB / "index.html")
 
 
 async def get_board(request: Request) -> JSONResponse:
-    return JSONResponse(_ctx(request).store.load().model_dump())
+    return JSONResponse(_load_board(_ctx(request)).model_dump())
 
 
 async def save_camera(request: Request) -> JSONResponse:
@@ -150,11 +198,16 @@ async def save_camera(request: Request) -> JSONResponse:
 
 async def pin(request: Request) -> JSONResponse:
     body = await request.json()
-    store = _ctx(request).store
+    ctx = _ctx(request)
+    store = ctx.store
     board = store.load()
+    known = {node.id for node in board.nodes}
     pin_node(board, body["hit"], x=_opt_float(body.get("x")), y=_opt_float(body.get("y")))
+    added = next((node for node in board.nodes if node.id not in known), None)
+    if added is not None:
+        capture_seen(added, _lookup(ctx, added))
     store.save(board)
-    return JSONResponse(board.model_dump())
+    return JSONResponse(_refresh_unreads(ctx, board).model_dump())
 
 
 async def link(request: Request) -> JSONResponse:
@@ -336,6 +389,7 @@ async def _run_sync(ctx: BoardContext, names: list[str]) -> None:
         ctx.job = {**queue.admin_job(), "status": "error", "error": str(exc)}
     finally:
         queue.release_lease("board")
+        _refresh_unreads(ctx, ctx.store.load())
 
 
 async def get_admin(request: Request) -> JSONResponse:
@@ -401,6 +455,19 @@ async def retry_dlq(request: Request) -> JSONResponse:
     return JSONResponse(ctx.admin_snapshot())
 
 
+async def mark_seen(request: Request) -> JSONResponse:
+    body = await request.json()
+    ctx = _ctx(request)
+    store = ctx.store
+    board = store.load()
+    node = board.node(str(body.get("id") or ""))
+    if node is None:
+        return JSONResponse({"error": "card not found"}, status_code=404)
+    capture_seen(node, _lookup(ctx, node))
+    store.save(board)
+    return JSONResponse(_refresh_unreads(ctx, board).model_dump())
+
+
 async def peek_watch(request: Request) -> JSONResponse:
     ctx = _ctx(request)
     body = await request.json()
@@ -416,7 +483,10 @@ async def peek_watch(request: Request) -> JSONResponse:
     return JSONResponse(data)
 
 
-def create_app(settings: Settings) -> Starlette:
+def create_app(
+    settings: Settings,
+    retrieval: RetrievalService | None = None,
+) -> Starlette:
     routes = [
         Route("/", index),
         Route("/api/board", get_board, methods=["GET"]),
@@ -426,6 +496,7 @@ def create_app(settings: Settings) -> Starlette:
         Route("/api/board/unlink", unlink, methods=["POST"]),
         Route("/api/board/unpin", unpin, methods=["POST"]),
         Route("/api/board/node", patch_node, methods=["POST"]),
+        Route("/api/board/seen", mark_seen, methods=["POST"]),
         Route("/api/board/walk", create_walk, methods=["POST"]),
         Route("/api/board/walk/active", activate_walk, methods=["POST"]),
         Route("/api/board/walk/delete", drop_walk, methods=["POST"]),
@@ -440,7 +511,7 @@ def create_app(settings: Settings) -> Starlette:
         Mount("/static", StaticFiles(directory=str(WEB)), name="static"),
     ]
     app = Starlette(routes=routes)
-    app.state.ctx = BoardContext(settings)
+    app.state.ctx = BoardContext(settings, retrieval=retrieval)
     return app
 
 

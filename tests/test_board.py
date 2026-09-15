@@ -4,6 +4,8 @@ from starlette.testclient import TestClient
 
 from ragtone.board import (
     BoardStore,
+    apply_unreads,
+    capture_seen,
     delete_walk,
     empty_board,
     link_nodes,
@@ -13,6 +15,10 @@ from ragtone.board import (
     unpin_node,
 )
 from ragtone.board_http import create_app
+from ragtone.chunking import chat_chunk, confluence_chunks, jira_chunks
+from ragtone.embeddings import HashEmbedder
+from ragtone.memory_index import InMemoryIndex
+from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
 
 
@@ -190,6 +196,10 @@ def test_board_page_opens_a_finder_for_index_hits(tmp_path: Path) -> None:
     assert 'id="show-rail"' in page
     assert "body.rail-collapsed" in css
     assert "ragtone.rail-collapsed" in js
+    assert ".node-badge" in css
+    assert "node.unread" in js
+    assert "/api/board/seen" in js
+    assert "refreshUnreads" in js
     settings = Settings(data_dir=tmp_path, embedder="hash")
     client = TestClient(create_app(settings))
     data = client.get("/api/recent").json()
@@ -224,3 +234,164 @@ def test_board_http_deletes_a_walk(tmp_path: Path) -> None:
     gone = client.post("/api/board/walk/delete", json={"id": walks[-1]["id"]})
     assert gone.status_code == 200
     assert [walk["name"] for walk in gone.json()["walks"]] == ["Trilha 1"]
+
+
+def test_thread_reply_after_pin_marks_the_card_unread() -> None:
+    board = empty_board()
+    pin_node(
+        board,
+        {
+            "source": "chat",
+            "title": "SSO caiu",
+            "thread_id": "t1",
+            "updated_at": "1.0",
+        },
+    )
+    node = board.nodes[0]
+    capture_seen(node, [{"updated_at": "1.0"}])
+    apply_unreads(board, lambda _: [{"updated_at": "1.0"}, {"updated_at": "1.1"}])
+    assert node.unread is True
+
+
+def test_confluence_edit_marks_the_card_unread() -> None:
+    board = empty_board()
+    pin_node(board, {"source": "confluence", "title": "Runbook", "id": "99", "updated_at": "2026-01-01"})
+    node = board.nodes[0]
+    capture_seen(node, [{"updated_at": "2026-01-01"}])
+    apply_unreads(board, lambda _: [{"updated_at": "2026-02-01"}])
+    assert node.unread is True
+
+
+def test_jira_comment_count_marks_the_card_unread() -> None:
+    board = empty_board()
+    pin_node(
+        board,
+        {
+            "source": "jira",
+            "title": "ABC-9",
+            "native_id": "ABC-9",
+            "parent_id": "ABC-9",
+            "updated_at": "2026-01-01",
+        },
+    )
+    node = board.nodes[0]
+    capture_seen(node, [{"updated_at": "2026-01-01"}])
+    apply_unreads(
+        board,
+        lambda _: [{"updated_at": "2026-01-01"}, {"updated_at": "2026-01-01T12:00:00"}],
+    )
+    assert node.unread is True
+
+
+def test_first_index_sighting_does_not_badge() -> None:
+    board = empty_board()
+    pin_node(board, {"source": "confluence", "title": "Runbook", "id": "99"})
+    node = board.nodes[0]
+    apply_unreads(board, lambda _: [{"updated_at": "2026-01-01"}])
+    assert node.unread is False
+    assert node.seen_stamp == "2026-01-01"
+    assert node.seen_count == 1
+
+
+def test_local_note_is_never_unread() -> None:
+    board = empty_board()
+    pin_node(board, {"source": "chat", "title": "nota", "native_id": "local:1", "id": "local:1"})
+    called = False
+
+    def lookup(_node):
+        nonlocal called
+        called = True
+        return [{"updated_at": "9.9"}]
+
+    apply_unreads(board, lookup)
+    assert called is False
+    assert board.nodes[0].unread is False
+
+
+def _app_with_index(tmp_path: Path, chunks):
+    embedder = HashEmbedder(8)
+    store = InMemoryIndex()
+    store.upsert(chunks, embedder.embed([chunk.text for chunk in chunks]))
+    retrieval = RetrievalService(store, embedder)
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    return TestClient(create_app(settings, retrieval=retrieval)), store, embedder
+
+
+def test_board_http_badges_a_new_slack_reply(tmp_path: Path) -> None:
+    root = chat_chunk(
+        message_id="1.0",
+        text="sso caiu",
+        channel="eng",
+        thread_id="1.0",
+        created_at="1.0",
+    )
+    client, store, embedder = _app_with_index(tmp_path, [root])
+    pinned = client.post(
+        "/api/board/pin",
+        json={"hit": {"source": "chat", "title": "eng", "thread_id": "1.0", "updated_at": "1.0"}},
+    )
+    assert pinned.json()["nodes"][0]["unread"] is False
+    reply = chat_chunk(
+        message_id="1.1",
+        text="gateway timeout",
+        channel="eng",
+        thread_id="1.0",
+        created_at="1.1",
+    )
+    store.upsert([reply], embedder.embed([reply.text]))
+    board = client.get("/api/board").json()
+    assert board["nodes"][0]["unread"] is True
+    seen = client.post("/api/board/seen", json={"id": board["nodes"][0]["id"]})
+    assert seen.status_code == 200
+    assert seen.json()["nodes"][0]["unread"] is False
+
+
+def test_board_http_badges_confluence_and_jira_updates(tmp_path: Path) -> None:
+    page = confluence_chunks(
+        page_id="99",
+        title="Runbook",
+        body="passo um",
+        updated_at="2026-01-01",
+    )
+    issue = jira_chunks(key="ABC-9", summary="VPN", description="túnel", updated_at="2026-01-01")
+    client, store, embedder = _app_with_index(tmp_path, page + issue)
+    client.post(
+        "/api/board/pin",
+        json={"hit": {"source": "confluence", "title": "Runbook", "parent_id": "99", "updated_at": "2026-01-01"}},
+    )
+    client.post(
+        "/api/board/pin",
+        json={
+            "hit": {
+                "source": "jira",
+                "title": "ABC-9",
+                "native_id": "ABC-9",
+                "parent_id": "ABC-9",
+                "updated_at": "2026-01-01",
+            }
+        },
+    )
+    later_page = confluence_chunks(
+        page_id="99",
+        title="Runbook",
+        body="passo um\n\npasso dois",
+        updated_at="2026-02-01",
+    )
+    later_issue = jira_chunks(
+        key="ABC-9",
+        summary="VPN",
+        description="túnel",
+        updated_at="2026-02-01",
+        comments=[{"id": "c1", "body": "ainda cai", "updated_at": "2026-02-01"}],
+    )
+    store.upsert(later_page + later_issue, embedder.embed([c.text for c in later_page + later_issue]))
+    nodes = {node["source"]: node for node in client.get("/api/board").json()["nodes"]}
+    assert nodes["confluence"]["unread"] is True
+    assert nodes["jira"]["unread"] is True
+
+
+def test_board_http_seen_missing_card(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    missing = client.post("/api/board/seen", json={"id": "nope"})
+    assert missing.status_code == 404
