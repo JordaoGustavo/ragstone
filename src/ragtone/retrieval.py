@@ -60,9 +60,15 @@ class RetrievalService:
     def page(self, page_id: str) -> list[dict]:
         return [hit.as_dict() for hit in self.store.by_page(page_id)]
 
-    def recent(self, *, source: str | None = "chat", k: int = 20) -> list[dict]:
+    def recent(
+        self,
+        *,
+        source: str | None = "chat",
+        k: int = 20,
+        fallback: bool = True,
+    ) -> list[dict]:
         raw = self.store.recent(source=source, k=max(k * 4, 40))
-        if not raw and source:
+        if not raw and source and fallback:
             raw = self.store.recent(source=None, k=max(k * 4, 40))
         seen: set[str] = set()
         collapsed: list[dict] = []

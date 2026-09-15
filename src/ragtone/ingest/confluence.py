@@ -5,7 +5,8 @@ import asyncio
 from ragtone.chunking import confluence_chunks
 from ragtone.ingest.base import FetchResult
 from ragtone.ingest.client import ToolCaller
-from ragtone.ingest.parse import as_records, as_text, iso_days_ago, later_watermark
+from ragtone.ingest.page import confluence_next, paged_records
+from ragtone.ingest.parse import as_text, iso_days_ago, later_watermark
 from ragtone.settings import ConfluenceSource, Settings
 
 
@@ -47,11 +48,16 @@ class ConfluenceConnector:
             return FetchResult()
         stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
         cql = scoped_cql(self.source.docs, self.source.cql, stamp)
-        payload = await self.caller.call_tool(
+        pages = await paged_records(
+            self.caller,
             self.source.search_tool,
             {"cql": cql, "cloudId": self.cloud_id, "limit": 25},
+            "results",
+            "pages",
+            "values",
+            pause=self.pause,
+            next_args=confluence_next,
         )
-        pages = as_records(payload, "results", "pages", "values")
         chunks = []
         newest = checkpoint
         for page in pages:

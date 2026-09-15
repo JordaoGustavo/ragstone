@@ -14,11 +14,12 @@ from starlette.staticfiles import StaticFiles
 from ragtone.admin import idle_job, snapshot
 from ragtone.board import BoardStore, delete_walk, link_nodes, move_node, new_walk, pin_node, unlink_edge, unpin_node
 from ragtone.checkpoints import CheckpointStore
-from ragtone.embeddings import HashEmbedder, build_embedder
+from ragtone.embeddings import build_embedder
 from ragtone.index import SearchIndex
 from ragtone.ingest.run import IngestConfigError, with_worker
 from ragtone.retrieval import RetrievalService
 from ragtone.settings import Settings
+from ragtone.channel_preview import peek_chat
 from ragtone.watches import WatchStore, parse_targets
 
 log = logging.getLogger(__name__)
@@ -63,15 +64,13 @@ class BoardContext:
         index = self.live_index()
         if index is None:
             stats = {"ok": False, "total": 0, "by_source": {}}
-            recent: list[dict] = []
         else:
             stats = index.stats()
-            recent = RetrievalService(index, HashEmbedder(8)).recent(source=None, k=20)
         return snapshot(
             self.settings,
             stats=stats,
             checkpoints=CheckpointStore(self.settings.checkpoint_path).all(),
-            recent=recent,
+            recent=[],
             job=self.job,
             watches=self.watches.resolved(self.settings),
         )
@@ -238,8 +237,18 @@ async def recent(request: Request) -> JSONResponse:
         return JSONResponse(
             {"ok": False, "reason": "elasticsearch unreachable", "hits": []}
         )
-    source = request.query_params.get("source") or "chat"
-    hits = retrieval.recent(source=None if source == "all" else source, k=20)
+    try:
+        k = int(request.query_params.get("k") or 20)
+    except ValueError:
+        k = 20
+    k = max(1, min(k, 80))
+    source = request.query_params.get("source")
+    if source is None or source == "":
+        hits = retrieval.recent(source="chat", k=k)
+    elif source == "all":
+        hits = retrieval.recent(source=None, k=k)
+    else:
+        hits = retrieval.recent(source=source, k=k, fallback=False)
     return JSONResponse({"ok": True, "hits": hits})
 
 
@@ -374,6 +383,21 @@ async def save_watches(request: Request) -> JSONResponse:
     return JSONResponse(ctx.admin_snapshot())
 
 
+async def peek_watch(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    body = await request.json()
+    name = str(body.get("name") or "").strip()
+    raw = str(body.get("ref") or body.get("value") or "")
+    if name != "chat":
+        return JSONResponse({"error": "só chat olha o canal pelo link"}, status_code=400)
+    if len(raw) > 2000:
+        return JSONResponse({"error": "texto grande demais"}, status_code=400)
+    data = await peek_chat(ctx.settings, raw)
+    if not data.get("id"):
+        return JSONResponse(data, status_code=400)
+    return JSONResponse(data)
+
+
 def create_app(settings: Settings) -> Starlette:
     routes = [
         Route("/", index),
@@ -393,6 +417,7 @@ def create_app(settings: Settings) -> Starlette:
         Route("/api/admin", get_admin, methods=["GET"]),
         Route("/api/admin/sync", start_sync, methods=["POST"]),
         Route("/api/admin/watches", save_watches, methods=["POST"]),
+        Route("/api/admin/peek", peek_watch, methods=["POST"]),
         Mount("/static", StaticFiles(directory=str(WEB)), name="static"),
     ]
     app = Starlette(routes=routes)

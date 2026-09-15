@@ -6,7 +6,8 @@ from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import chat_chunk
 from ragtone.ingest.base import FetchResult
 from ragtone.ingest.client import ToolCaller
-from ragtone.ingest.parse import as_records, as_text, later_watermark, unix_days_ago
+from ragtone.ingest.page import chat_next, paged_records
+from ragtone.ingest.parse import as_text, later_watermark, unix_days_ago
 from ragtone.settings import ChatSource, Settings
 
 
@@ -44,11 +45,15 @@ class ChatConnector:
         watermarks: dict[str, str] = {}
         for channel in self.source.channels:
             oldest = self._oldest(channel, backfill=backfill)
-            history = await self.caller.call_tool(
+            messages = await paged_records(
+                self.caller,
                 self.source.history_tool,
                 {"channel_id": channel, "oldest": oldest},
+                "messages",
+                "results",
+                pause=self.pause,
+                next_args=chat_next,
             )
-            messages = as_records(history, "messages", "results")
             thread_ids: set[str] = set()
             channel_newest = None
             for message in messages:
@@ -70,11 +75,16 @@ class ChatConnector:
                 chunks.append(chunk)
                 channel_newest = later_watermark(channel_newest, chunk.created_at)
             for thread_id in thread_ids:
-                replies = await self.caller.call_tool(
+                replies = await paged_records(
+                    self.caller,
                     self.source.replies_tool,
                     {"channel_id": channel, "message_ts": thread_id},
+                    "messages",
+                    "replies",
+                    pause=self.pause,
+                    next_args=chat_next,
                 )
-                for message in as_records(replies, "messages", "replies"):
+                for message in replies:
                     message_id = str(message.get("ts") or message.get("id") or "")
                     if not message_id:
                         continue

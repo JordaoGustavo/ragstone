@@ -1,14 +1,21 @@
+const rail = document.getElementById("rail");
+const hideRail = document.getElementById("hide-rail");
+const showRail = document.getElementById("show-rail");
 const viewport = document.getElementById("viewport");
 const world = document.getElementById("world");
 const edgesEl = document.getElementById("edges");
 const nodesEl = document.getElementById("nodes");
-const hitsEl = document.getElementById("hits");
 const recentsEl = document.getElementById("recents");
+const finder = document.getElementById("finder");
+const finderHits = document.getElementById("finder-hits");
+const finderStatus = document.getElementById("finder-status");
+const finderFilters = document.getElementById("finder-filters");
+const queryField = document.getElementById("q");
 const recentsLabel = document.getElementById("recents-label");
 const strip = document.getElementById("strip");
 const walkList = document.getElementById("walk-list");
 const inspector = document.getElementById("inspector");
-const searchStatus = document.getElementById("search-status");
+const searchStatus = finderStatus;
 const admin = document.getElementById("admin");
 const adminJob = document.getElementById("admin-job");
 const adminIndex = document.getElementById("admin-index");
@@ -16,6 +23,26 @@ const adminGaps = document.getElementById("admin-gaps");
 const adminConnectors = document.getElementById("admin-connectors");
 const adminRecent = document.getElementById("admin-recent");
 const syncAll = document.getElementById("sync-all");
+const adminRecentState = new Map();
+let adminConnectorRows = [];
+let chatPeek = null;
+
+const CONNECTORS = [
+  { id: "chat", label: "chat" },
+  { id: "jira", label: "jira" },
+  { id: "confluence", label: "confluence" },
+];
+
+let finderSource = "all";
+let finderCatalog = { chat: [], jira: [], confluence: [] };
+let finderPick = 0;
+let searchTimer = 0;
+let searchGen = 0;
+let lastSearched = null;
+
+function emptyCatalog() {
+  return { chat: [], jira: [], confluence: [] };
+}
 
 let board = null;
 let selectedId = null;
@@ -509,7 +536,84 @@ function pinHit(hit) {
   });
 }
 
-function renderFeed(el, hits, empty, onPick) {
+function firstSentence(text, max = 88) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  if (compact.length <= max) return compact;
+  const window = compact.slice(0, max + 1);
+  const punct = [...window.matchAll(/[.!?](?=\s|$)/g)];
+  if (punct.length && punct[0].index + 1 >= 24) {
+    return compact.slice(0, punct[0].index + 1).trim();
+  }
+  const space = window.lastIndexOf(" ");
+  return (space >= 24 ? compact.slice(0, space) : compact.slice(0, max)).trim();
+}
+
+function hitKind(hit) {
+  const bits = [hit.source];
+  if (hit.channel_or_space) bits.push(hit.channel_or_space);
+  if (
+    hit.source === "jira" &&
+    hit.native_id &&
+    hit.native_id !== hit.title &&
+    !bits.includes(hit.native_id)
+  ) {
+    bits.push(hit.native_id);
+  }
+  return bits.filter(Boolean).join(" · ");
+}
+
+function hitTitle(hit) {
+  const title = (hit.title || "").trim();
+  const channel = (hit.channel_or_space || "").trim();
+  if (title && title !== channel) return title;
+  const text = (hit.text || "").trim();
+  if (text) return firstSentence(text);
+  return title || hit.native_id || "sem título";
+}
+
+function hitPreview(hit, limit) {
+  const storedTitle = (hit.title || "").trim();
+  const channel = (hit.channel_or_space || "").trim();
+  let text = (hit.text || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (storedTitle && storedTitle !== channel && text.startsWith(storedTitle)) {
+    text = text.slice(storedTitle.length).replace(/^[\s:.\-–—/]+/, "").trim();
+  }
+  if (!text) return "";
+  const shown = hitTitle(hit);
+  if (text === shown) return "";
+  if (text.startsWith(shown)) {
+    const rest = text.slice(shown.length).replace(/^[\s:.\-–—/]+/, "").trim();
+    if (rest) text = rest;
+  }
+  return text.length > limit ? `${text.slice(0, limit).trim()}…` : text;
+}
+
+function renderHit(hit, { size = "compact", onPick } = {}) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `${size === "sheet" ? "finder-hit" : "hit"} ${hit.source || ""}`;
+  const title = hitTitle(hit);
+  btn.setAttribute("aria-label", `Soltar ${title} no canvas`);
+  const kind = document.createElement("small");
+  kind.textContent = hitKind(hit);
+  const heading = document.createElement("b");
+  heading.textContent = title;
+  const excerpt = document.createElement("span");
+  if (size === "sheet") excerpt.className = "preview";
+  excerpt.textContent = hitPreview(hit, size === "sheet" ? 280 : 110);
+  btn.append(kind, heading);
+  if (excerpt.textContent) btn.append(excerpt);
+  btn.addEventListener("click", () => {
+    pinHit(hit);
+    searchStatus.textContent = "solto — arrasta o cobre para ligar";
+    onPick?.(hit);
+  });
+  return btn;
+}
+
+function renderFeed(el, hits, empty, onPick, size = "compact") {
   el.innerHTML = "";
   if (!hits.length) {
     const note = document.createElement("p");
@@ -519,23 +623,162 @@ function renderFeed(el, hits, empty, onPick) {
     return;
   }
   for (const hit of hits) {
-    const btn = document.createElement("button");
-    btn.className = "hit";
-    const kind = document.createElement("small");
-    const channel = hit.channel_or_space ? ` · ${hit.channel_or_space}` : "";
-    kind.textContent = `${hit.source}${channel}`;
-    const title = document.createElement("b");
-    title.textContent = (hit.text || hit.title || hit.native_id).slice(0, 80);
-    const excerpt = document.createElement("span");
-    excerpt.textContent = hit.title && hit.text && hit.title !== hit.text ? hit.title : (hit.text || "").slice(80, 180);
-    btn.append(kind, title, excerpt);
-    btn.addEventListener("click", () => {
-      pinHit(hit);
-      searchStatus.textContent = "solto — arrasta o cobre para ligar";
-      onPick?.(hit);
-    });
-    el.appendChild(btn);
+    el.appendChild(renderHit(hit, { size, onPick }));
   }
+}
+
+function finderHitButtons() {
+  return [...finderHits.querySelectorAll(".finder-hit")];
+}
+
+function selectFinderHit(index) {
+  const buttons = finderHitButtons();
+  if (!buttons.length) {
+    finderPick = 0;
+    return;
+  }
+  finderPick = ((index % buttons.length) + buttons.length) % buttons.length;
+  buttons.forEach((btn, i) => {
+    btn.classList.toggle("on", i === finderPick);
+    btn.setAttribute("aria-selected", i === finderPick ? "true" : "false");
+  });
+  buttons[finderPick].scrollIntoView({ block: "nearest" });
+}
+
+function closeFinder() {
+  finder.hidden = true;
+  document.body.classList.remove("finder-open");
+  clearTimeout(searchTimer);
+}
+
+function openFinder() {
+  inspector.hidden = true;
+  finder.hidden = false;
+  document.body.classList.add("finder-open");
+}
+
+function finderChordLabel() {
+  return /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘K" : "Ctrl+K";
+}
+
+function summonFinder() {
+  if (!finder.hidden) {
+    queryField.focus();
+    return;
+  }
+  if (admin && !admin.hidden) closeAdmin();
+  openFinder();
+  queryField.focus();
+  const q = queryField.value.trim();
+  if (q) runSearch();
+  else browseIndex();
+}
+
+function catalogCount(source) {
+  if (source === "all") {
+    return CONNECTORS.reduce((sum, conn) => sum + finderCatalog[conn.id].length, 0);
+  }
+  return finderCatalog[source]?.length || 0;
+}
+
+function renderFinderFilters() {
+  finderFilters.innerHTML = "";
+  const options = [{ id: "all", label: "Todos" }, ...CONNECTORS];
+  for (const option of options) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.dataset.source = option.id;
+    btn.className = option.id;
+    if (option.id === finderSource) btn.classList.add("on");
+    const count = catalogCount(option.id);
+    btn.textContent = count ? `${option.label} ${count}` : option.label;
+    btn.setAttribute("aria-pressed", option.id === finderSource ? "true" : "false");
+    btn.addEventListener("click", () => {
+      if (finderSource === option.id) return;
+      finderSource = option.id;
+      renderFinderFilters();
+      renderCatalog();
+    });
+    finderFilters.appendChild(btn);
+  }
+}
+
+function renderCatalog() {
+  finderHits.innerHTML = "";
+  const total = catalogCount("all");
+  if (!total) {
+    renderFeed(finderHits, [], "nada neste conector ainda", undefined, "sheet");
+    finderStatus.textContent = finderSource === "all" ? "nada no índice ainda" : `nada em ${finderSource}`;
+    return;
+  }
+  if (finderSource !== "all") {
+    const hits = finderCatalog[finderSource] || [];
+    finderStatus.textContent = hits.length
+      ? `${hits.length} em ${finderSource} — clique ou Enter para soltar`
+      : `nada em ${finderSource}`;
+    renderFeed(finderHits, hits, `nada em ${finderSource}`, closeFinder, "sheet");
+    selectFinderHit(0);
+    return;
+  }
+  finderStatus.textContent = `${total} no índice — filtre por conector`;
+  for (const conn of CONNECTORS) {
+    const hits = finderCatalog[conn.id];
+    if (!hits.length) continue;
+    const heading = document.createElement("p");
+    heading.className = `finder-group ${conn.id}`;
+    heading.textContent = conn.label;
+    finderHits.appendChild(heading);
+    for (const hit of hits) {
+      finderHits.appendChild(renderHit(hit, { size: "sheet", onPick: closeFinder }));
+    }
+  }
+  selectFinderHit(0);
+}
+
+async function loadCatalog() {
+  const catalog = emptyCatalog();
+  const results = await Promise.all(
+    CONNECTORS.map((conn) =>
+      fetch(`/api/recent?source=${encodeURIComponent(conn.id)}&k=32`).then((r) =>
+        r.json(),
+      ),
+    ),
+  );
+  let ok = false;
+  CONNECTORS.forEach((conn, index) => {
+    const data = results[index];
+    if (data?.ok) {
+      ok = true;
+      catalog[conn.id] = data.hits || [];
+    }
+  });
+  return { ok, catalog };
+}
+
+async function browseIndex() {
+  const gen = ++searchGen;
+  lastSearched = "";
+  finderSource = "all";
+  finderCatalog = emptyCatalog();
+  openFinder();
+  finderFilters.hidden = false;
+  renderFinderFilters();
+  searchStatus.textContent = "olhando o índice…";
+  finderHits.innerHTML = "";
+  const { ok, catalog } = await loadCatalog();
+  if (gen !== searchGen) return;
+  finderCatalog = catalog;
+  renderFinderFilters();
+  if (!ok) {
+    finderFilters.hidden = true;
+    searchStatus.textContent = "índice fora — Soltar nota põe no canvas";
+    finderHits.innerHTML = "";
+    return;
+  }
+  searchStatus.textContent = catalogCount("all")
+    ? `${catalogCount("all")} no índice`
+    : "nada no índice ainda";
+  renderCatalog();
 }
 
 async function loadRecents() {
@@ -543,15 +786,14 @@ async function loadRecents() {
   recentsEl.hidden = false;
   const data = await fetch("/api/recent").then((r) => r.json());
   if (!data.ok) {
-    renderFeed(recentsEl, [], "nada no índice ainda — Soltar põe uma nota");
+    renderFeed(recentsEl, [], "nada no índice ainda — Buscar solta uma nota");
     return;
   }
   renderFeed(recentsEl, data.hits, "nada recente no índice ainda");
 }
 
 function dropTyped() {
-  const field = document.getElementById("q");
-  const text = field.value.trim();
+  const text = queryField.value.trim();
   if (!text) return;
   const ref = `local:${Date.now()}`;
   pinHit({
@@ -561,36 +803,106 @@ function dropTyped() {
     native_id: ref,
     id: ref,
   });
-  field.value = "";
-  hitsEl.innerHTML = "";
-  hitsEl.hidden = true;
-  searchStatus.textContent = "solto — arrasta o cobre para ligar";
+  queryField.value = "";
+  lastSearched = null;
+  closeFinder();
 }
 
 async function runSearch() {
-  const field = document.getElementById("q");
-  const q = field.value.trim();
-  if (!q) return;
-  searchStatus.textContent = "buscando…";
-  const data = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then((r) => r.json());
-  hitsEl.hidden = false;
-  if (!data.ok) {
-    searchStatus.textContent = "índice fora — Soltar põe uma nota";
-    hitsEl.innerHTML = "";
-    hitsEl.hidden = true;
+  const q = queryField.value.trim();
+  if (!q) {
+    await browseIndex();
     return;
   }
-  searchStatus.textContent = data.hits.length ? `${data.hits.length} achados` : "nada encontrado";
-  renderFeed(hitsEl, data.hits, "nada encontrado");
+  const gen = ++searchGen;
+  lastSearched = q;
+  finderFilters.hidden = true;
+  openFinder();
+  searchStatus.textContent = "buscando…";
+  finderHits.innerHTML = "";
+  const data = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then((r) => r.json());
+  if (gen !== searchGen) return;
+  if (!data.ok) {
+    searchStatus.textContent = "índice fora — Soltar nota põe no canvas";
+    finderHits.innerHTML = "";
+    return;
+  }
+  const msg = data.hits.length
+    ? `${data.hits.length} achados — Enter solta o marcado`
+    : "nada encontrado — Enter solta uma nota";
+  searchStatus.textContent = msg;
+  renderFeed(finderHits, data.hits, "nada encontrado — Enter solta uma nota", closeFinder, "sheet");
+  selectFinderHit(0);
 }
 
-document.getElementById("q").addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  runSearch();
+async function commitFinder() {
+  const q = queryField.value.trim();
+  if (q !== lastSearched) {
+    await runSearch();
+  }
+  const buttons = finderHitButtons();
+  if (buttons.length) {
+    (buttons[finderPick] || buttons[0]).click();
+    return;
+  }
+  dropTyped();
+}
+
+const RAIL_KEY = "ragtone.rail-collapsed";
+
+function setRailCollapsed(collapsed) {
+  document.body.classList.toggle("rail-collapsed", collapsed);
+  rail.inert = collapsed;
+  hideRail.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  showRail.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  try {
+    localStorage.setItem(RAIL_KEY, collapsed ? "1" : "0");
+  } catch (err) {}
+}
+
+hideRail.addEventListener("click", () => {
+  setRailCollapsed(true);
+  showRail.focus();
+});
+showRail.addEventListener("click", () => {
+  setRailCollapsed(false);
+  hideRail.focus();
+});
+setRailCollapsed(document.body.classList.contains("rail-collapsed"));
+
+document.getElementById("open-finder").addEventListener("click", summonFinder);
+document.getElementById("open-finder-float").addEventListener("click", summonFinder);
+document.getElementById("drop").addEventListener("click", dropTyped);
+document.getElementById("close-finder").addEventListener("click", closeFinder);
+finder.addEventListener("click", (event) => {
+  if (event.target === finder) closeFinder();
 });
 
-document.getElementById("drop").addEventListener("click", dropTyped);
+queryField.addEventListener("input", () => {
+  if (finder.hidden) return;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 280);
+});
+
+queryField.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    selectFinderHit(finderPick + 1);
+    return;
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    selectFinderHit(finderPick - 1);
+    return;
+  }
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  commitFinder();
+});
+
+for (const el of document.querySelectorAll("[data-finder-chord]")) {
+  el.textContent = finderChordLabel();
+}
 
 function unpinNode(id) {
   if (selectedId === id) selectedId = null;
@@ -628,13 +940,30 @@ edgesEl.addEventListener("dblclick", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.target.closest("input, textarea")) return;
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    if (!finder.hidden) closeFinder();
+    else summonFinder();
+    return;
+  }
+  if (event.key === "Escape" && finder && !finder.hidden) {
+    closeFinder();
+    event.preventDefault();
+    return;
+  }
+  if (event.target.closest("input, textarea, select")) return;
+  if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    summonFinder();
+    return;
+  }
   if (event.key === "Escape" && admin && !admin.hidden) {
     closeAdmin();
     event.preventDefault();
     return;
   }
   if (admin && !admin.hidden) return;
+  if (finder && !finder.hidden) return;
   if (event.key !== "Backspace" && event.key !== "Delete") return;
   event.preventDefault();
   if (selectedEdgeId) {
@@ -666,7 +995,7 @@ const GAP_COPY = {
 };
 
 const WATCH_UI = {
-  chat: { title: "Canais do Slack", placeholder: "C0123 ou eng" },
+  chat: { title: "Canais do Slack", placeholder: "cola o link do canal" },
   jira: { title: "Boards / projetos", placeholder: "ABC" },
   confluence: { title: "Docs / espaços", placeholder: "ENG ou 123456" },
 };
@@ -695,6 +1024,9 @@ function rangeLabel(days) {
 function closeAdmin() {
   admin.hidden = true;
   clearTimeout(adminTimer);
+  adminRecentState.clear();
+  adminRecent.innerHTML = "";
+  chatPeek = null;
 }
 
 function jobLine(job) {
@@ -771,38 +1103,263 @@ function watchEditor(row) {
   input.autocomplete = "off";
   const submit = document.createElement("button");
   submit.type = "submit";
-  submit.textContent = "Adicionar";
   if (row.name === "chat") {
+    submit.textContent = "Olhar";
+    submit.dataset.peek = "1";
+    add.append(input, submit);
+    const peek = document.createElement("div");
+    peek.className = "watch-peek";
+    peek.hidden = true;
+    input.addEventListener("input", () => {
+      if (chatPeek && input.value.trim() !== chatPeek.raw) {
+        chatPeek = null;
+        paintChatPeek(wrap);
+      }
+    });
+    wrap.addEventListener("submit", (event) => {
+      event.preventDefault();
+      lookAtChat(input.value);
+    });
+    wrap.append(label, chips, add, peek);
+    paintChatPeek(wrap);
+    return wrap;
+  }
+  submit.textContent = "Adicionar";
+  add.append(input, submit);
+  wrap.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const value = input.value.trim();
+    if (!value) return;
+    saveWatches(row.name, items.concat({ id: value }));
+  });
+  wrap.append(label, chips, add);
+  return wrap;
+}
+
+function paintChatPeek(wrap) {
+  const panel = wrap.querySelector(".watch-peek");
+  const input = wrap.querySelector(".watch-add input");
+  const look = wrap.querySelector("[data-peek]");
+  if (!panel) return;
+  if (chatPeek?.raw && input && input.value.trim() === "") {
+    input.value = chatPeek.raw;
+  }
+  if (look) look.disabled = Boolean(chatPeek?.loading);
+  if (!chatPeek) {
+    panel.hidden = true;
+    panel.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  panel.replaceChildren();
+  const head = document.createElement("p");
+  head.className = "search-label";
+  if (chatPeek.loading) head.textContent = "olhando o canal…";
+  else if (chatPeek.title && chatPeek.title !== chatPeek.id) {
+    head.textContent = `${chatPeek.title} · ${chatPeek.id}`;
+  } else {
+    head.textContent = chatPeek.id ? `canal ${chatPeek.id}` : "canal";
+  }
+  panel.appendChild(head);
+  if (chatPeek.error) {
+    const note = document.createElement("p");
+    note.className = "status";
+    note.textContent = chatPeek.error;
+    panel.appendChild(note);
+  }
+  if (chatPeek.messages?.length) {
+    const list = document.createElement("ol");
+    list.className = "watch-preview";
+    for (const message of chatPeek.messages) {
+      const item = document.createElement("li");
+      const who = document.createElement("b");
+      who.textContent = message.author || "msg";
+      const body = document.createElement("span");
+      body.textContent = message.text;
+      item.append(who, body);
+      list.appendChild(item);
+    }
+    panel.appendChild(list);
+  }
+  if (!chatPeek.loading && chatPeek.id) {
+    const confirm = document.createElement("div");
+    confirm.className = "watch-confirm";
     const select = document.createElement("select");
     select.setAttribute("aria-label", "Quanto tempo para trás");
     for (const option of CHANNEL_RANGES) {
       const node = document.createElement("option");
       node.value = String(option.days);
       node.textContent = option.label;
-      if (option.days === 90) node.selected = true;
+      if (option.days === (chatPeek.days ?? 90)) node.selected = true;
       select.appendChild(node);
     }
-    add.append(input, select, submit);
-    wrap.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const value = input.value.trim();
-      if (!value) return;
-      saveWatches(row.name, items.concat({
-        id: value,
+    select.addEventListener("change", () => {
+      chatPeek.days = Number(select.value);
+    });
+    const add = document.createElement("button");
+    add.type = "button";
+    add.textContent = "Adicionar";
+    add.addEventListener("click", () => {
+      const items = asTargets(
+        adminConnectorRows.find((row) => row.name === "chat") || { watching: [] },
+      );
+      saveWatches("chat", items.concat({
+        id: chatPeek.id,
         backfill_days: Number(select.value),
       }));
     });
-  } else {
-    add.append(input, submit);
-    wrap.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const value = input.value.trim();
-      if (!value) return;
-      saveWatches(row.name, items.concat({ id: value }));
-    });
+    confirm.append(select, add);
+    panel.appendChild(confirm);
   }
-  wrap.append(label, chips, add);
-  return wrap;
+}
+
+async function lookAtChat(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return;
+  chatPeek = { raw: value, loading: true, id: null, title: null, messages: [], error: null, days: 90 };
+  const wrap = document.querySelector('.admin-watch[data-source="chat"]');
+  if (wrap) paintChatPeek(wrap);
+  try {
+    const res = await fetch("/api/admin/peek", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "chat", ref: value }),
+    });
+    const data = await res.json();
+    if (!chatPeek || chatPeek.raw !== value) return;
+    chatPeek = {
+      raw: value,
+      loading: false,
+      id: data.id || null,
+      title: data.title || data.id || null,
+      messages: data.messages || [],
+      error: data.error || (!res.ok ? "não deu para olhar o canal" : null),
+      days: 90,
+    };
+  } catch {
+    if (!chatPeek || chatPeek.raw !== value) return;
+    chatPeek = {
+      raw: value,
+      loading: false,
+      id: null,
+      title: null,
+      messages: [],
+      error: "não deu para olhar o canal",
+      days: 90,
+    };
+  }
+  const next = document.querySelector('.admin-watch[data-source="chat"]');
+  if (next) paintChatPeek(next);
+}
+
+function recentDrawerState(name) {
+  if (!adminRecentState.has(name)) {
+    adminRecentState.set(name, { open: false, loading: false, hits: null, ok: true });
+  }
+  return adminRecentState.get(name);
+}
+
+function makeRecentDrawer(row) {
+  const card = document.createElement("article");
+  card.className = "admin-recent-source";
+  card.dataset.source = row.name;
+  const head = document.createElement("header");
+  const copy = document.createElement("div");
+  const title = document.createElement("h4");
+  title.textContent = row.name;
+  const meta = document.createElement("p");
+  meta.className = "admin-recent-meta";
+  copy.append(title, meta);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.addEventListener("click", () => toggleAdminRecent(row.name));
+  const hits = document.createElement("div");
+  hits.className = "admin-recent-hits hits";
+  hits.id = `admin-recent-${row.name}`;
+  hits.hidden = true;
+  head.append(copy, btn);
+  card.append(head, hits);
+  return card;
+}
+
+function paintRecentDrawer(row) {
+  const card = adminRecent.querySelector(`[data-source="${row.name}"]`);
+  if (!card) return;
+  const state = recentDrawerState(row.name);
+  const meta = card.querySelector(".admin-recent-meta");
+  const btn = card.querySelector("header button");
+  const hits = card.querySelector(".admin-recent-hits");
+  meta.textContent = `${row.chunks} chunks`;
+  btn.disabled = state.loading;
+  btn.setAttribute("aria-expanded", state.open ? "true" : "false");
+  btn.setAttribute("aria-controls", hits.id);
+  if (state.loading) btn.textContent = "Abrindo…";
+  else if (state.open) btn.textContent = "Fechar";
+  else btn.textContent = "Abrir";
+  card.classList.toggle("is-open", state.open);
+  hits.hidden = !state.open;
+  if (!state.open) {
+    hits.innerHTML = "";
+    return;
+  }
+  if (state.loading) {
+    renderFeed(hits, [], "abrindo…");
+    return;
+  }
+  if (!state.ok) {
+    renderFeed(hits, [], "índice fora");
+    return;
+  }
+  renderFeed(hits, state.hits || [], "nada recente neste conector", closeAdmin);
+}
+
+function renderAdminRecents(connectors) {
+  adminConnectorRows = connectors;
+  const names = connectors.map((row) => row.name);
+  const shown = [...adminRecent.querySelectorAll("[data-source]")].map(
+    (el) => el.dataset.source,
+  );
+  if (shown.join("\0") !== names.join("\0")) {
+    adminRecent.innerHTML = "";
+    for (const row of connectors) {
+      adminRecent.appendChild(makeRecentDrawer(row));
+    }
+  }
+  for (const row of connectors) {
+    paintRecentDrawer(row);
+  }
+}
+
+async function toggleAdminRecent(name) {
+  const row = adminConnectorRows.find((item) => item.name === name) || {
+    name,
+    chunks: 0,
+  };
+  const state = recentDrawerState(name);
+  if (state.open) {
+    state.open = false;
+    state.loading = false;
+    paintRecentDrawer(row);
+    return;
+  }
+  state.open = true;
+  state.loading = true;
+  paintRecentDrawer(row);
+  try {
+    const data = await fetch(`/api/recent?source=${encodeURIComponent(name)}`).then(
+      (r) => r.json(),
+    );
+    if (!state.open) return;
+    state.ok = Boolean(data.ok);
+    state.hits = data.hits || [];
+  } catch {
+    if (!state.open) return;
+    state.ok = false;
+    state.hits = [];
+  } finally {
+    state.loading = false;
+  }
+  if (state.open) paintRecentDrawer(row);
 }
 
 function renderConnectors(data) {
@@ -829,7 +1386,7 @@ function renderConnectors(data) {
   }
 }
 
-function renderAdmin(data) {
+function renderAdmin(data, { forceConnectors = false } = {}) {
   adminJob.textContent = jobLine(data.job);
   adminIndex.textContent = indexLine(data.index);
   adminGaps.innerHTML = "";
@@ -848,17 +1405,13 @@ function renderAdmin(data) {
   }
   const running = data.job?.status === "running";
   const focused = document.activeElement;
-  const typing = Boolean(
-    focused &&
-      focused.closest(".watch-add") &&
-      (focused.tagName === "INPUT" || focused.tagName === "SELECT"),
-  );
-  if (!typing) {
+  const typing = Boolean(focused && focused.closest(".admin-watch"));
+  if (!typing || forceConnectors) {
     renderConnectors(data);
   } else {
     syncAll.disabled = running || !(data.connectors || []).some((row) => row.can_sync);
   }
-  renderFeed(adminRecent, data.recent || [], "nada no índice ainda", closeAdmin);
+  renderAdminRecents(data.connectors || []);
   if (running) {
     clearTimeout(adminTimer);
     adminTimer = setTimeout(refreshAdmin, 2000);
@@ -897,11 +1450,13 @@ async function saveWatches(name, items) {
     adminJob.textContent = data.error || "não deu para salvar";
     return;
   }
-  renderAdmin(data);
+  if (name === "chat") chatPeek = null;
+  renderAdmin(data, { forceConnectors: true });
 }
 
 function openAdmin() {
   inspector.hidden = true;
+  closeFinder();
   admin.hidden = false;
   refreshAdmin();
 }

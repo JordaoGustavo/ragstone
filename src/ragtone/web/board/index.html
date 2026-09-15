@@ -13,32 +13,65 @@
     <link rel="stylesheet" href="/static/board.css" />
   </head>
   <body>
-    <aside class="rail">
-      <p class="mark">Trilha</p>
-      <p class="lede">
-        Busca no índice ou solta uma nota. Recentes embaixo — clique para
-        cair sozinho no canvas. Arrasta o cobre para ligar. Duplo clique na
-        corda corta.
-      </p>
-      <label class="search-label" for="q">Buscar no índice</label>
-      <div class="composer">
-        <input id="q" type="search" placeholder="SSO, ABC-12, runbook…" autocomplete="off" />
-        <button type="button" id="drop">Soltar</button>
-      </div>
-      <p id="search-status" class="status"></p>
-      <div class="feed">
-        <div id="hits" class="hits" hidden></div>
-        <p class="search-label" id="recents-label">Recentes</p>
-        <div id="recents" class="hits"></div>
-      </div>
-      <div class="rail-foot">
-        <button type="button" id="open-admin">Admin</button>
-        <p class="search-label">Caminhos</p>
-        <button type="button" id="new-walk">Nova trilha</button>
-        <ol id="walk-list"></ol>
+    <script>
+      try {
+        if (localStorage.getItem("ragtone.rail-collapsed") === "1") {
+          document.body.classList.add("rail-collapsed");
+        }
+      } catch (err) {}
+    </script>
+    <aside class="rail" id="rail">
+      <div class="rail-inner">
+        <div class="rail-head">
+          <p class="mark">Trilha</p>
+          <button
+            type="button"
+            id="hide-rail"
+            class="rail-toggle"
+            aria-controls="rail"
+            aria-expanded="true"
+            aria-label="Esconder menu"
+            title="Esconder menu"
+          >
+            ‹
+          </button>
+        </div>
+        <button type="button" id="open-finder">
+          Buscar
+          <kbd data-finder-chord>⌘K</kbd>
+        </button>
+        <p class="lede">
+          Buscar abre o índice. Clique num recente para soltar no canvas.
+          Arrasta o cobre para ligar. Duplo clique na corda corta.
+        </p>
+        <div class="feed">
+          <p class="search-label" id="recents-label">Recentes</p>
+          <div id="recents" class="hits"></div>
+        </div>
+        <div class="rail-foot">
+          <button type="button" id="open-admin">Admin</button>
+          <p class="search-label">Caminhos</p>
+          <button type="button" id="new-walk">Nova trilha</button>
+          <ol id="walk-list"></ol>
+        </div>
       </div>
     </aside>
     <main id="stage">
+      <button
+        type="button"
+        id="show-rail"
+        class="rail-peek"
+        aria-controls="rail"
+        aria-expanded="true"
+        aria-label="Mostrar menu"
+        title="Mostrar menu"
+      >
+        ›
+      </button>
+      <button type="button" id="open-finder-float" class="spot-launch">
+        Buscar
+        <kbd data-finder-chord>⌘K</kbd>
+      </button>
       <div id="viewport">
         <div id="world">
           <div id="paper" aria-hidden="true"></div>
@@ -47,6 +80,23 @@
         </div>
       </div>
       <nav id="strip" aria-label="Caminho percorrido"></nav>
+      <section id="finder" hidden>
+        <div class="finder-sheet" role="dialog" aria-modal="true" aria-labelledby="finder-field-label">
+          <header class="finder-bar">
+            <div class="finder-bar-head">
+              <label class="search-label" id="finder-field-label" for="q">Índice</label>
+              <div class="finder-actions">
+                <button type="button" id="drop">Soltar nota</button>
+                <button type="button" id="close-finder" class="ghost">Fechar</button>
+              </div>
+            </div>
+            <input id="q" type="search" placeholder="SSO, ABC-12, runbook…" autocomplete="off" />
+            <p id="finder-status" class="status"></p>
+          </header>
+          <nav id="finder-filters" class="finder-filters" hidden aria-label="Filtrar por conector"></nav>
+          <div id="finder-hits" class="finder-hits"></div>
+        </div>
+      </section>
       <section id="admin" hidden>
         <header class="admin-head">
           <div>
@@ -81,7 +131,7 @@
         </section>
         <section class="admin-block">
           <h3>Recentes no índice</h3>
-          <div id="admin-recent" class="hits"></div>
+          <div id="admin-recent"></div>
         </section>
       </section>
     </main>

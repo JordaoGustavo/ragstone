@@ -162,6 +162,47 @@ def test_recent_messages_are_newest_thread_first() -> None:
     assert [hit["text"] for hit in hits] == ["new in thread", "other channel"]
 
 
+def test_recent_without_fallback_stays_on_the_source() -> None:
+    embedder = HashEmbedder(8)
+    store = InMemoryIndex()
+    docs = [
+        chat_chunk(
+            message_id="1.0",
+            text="only chat",
+            channel="eng",
+            thread_id="1.0",
+            created_at="2026-03-01T00:00:00",
+        ),
+        *jira_chunks(key="ABC-1", summary="VPN", description="tunnel down"),
+    ]
+    store.upsert(docs, embedder.embed([chunk.text for chunk in docs]))
+    service = RetrievalService(store, embedder)
+    jira = service.recent(source="jira", fallback=False)
+    assert {hit["source"] for hit in jira} == {"jira"}
+    missing = service.recent(source="confluence", fallback=False)
+    assert missing == []
+    mixed = service.recent(source="confluence", fallback=True)
+    assert mixed
+
+
+def test_recent_named_source_stays_in_that_connector() -> None:
+    embedder = HashEmbedder(8)
+    store = InMemoryIndex()
+    docs = [
+        chat_chunk(
+            message_id="1.0",
+            text="sso caiu",
+            channel="eng",
+            thread_id="1.0",
+        )
+    ]
+    store.upsert(docs, embedder.embed([chunk.text for chunk in docs]))
+    service = RetrievalService(store, embedder)
+    assert service.recent(source="jira", k=10, fallback=False) == []
+    mixed = service.recent(source="jira", k=10)
+    assert [hit["source"] for hit in mixed] == ["chat"]
+
+
 def test_retrieval_search_prefers_the_matching_issue() -> None:
     embedder = HashEmbedder(32)
     store = InMemoryIndex()

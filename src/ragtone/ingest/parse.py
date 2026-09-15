@@ -31,6 +31,10 @@ def as_records(payload: Any, *keys: str) -> list[dict[str, Any]]:
             nested = payload.get(key)
             if isinstance(nested, list):
                 return [item for item in nested if isinstance(item, dict)]
+            if isinstance(nested, dict):
+                nodes = nested.get("nodes")
+                if isinstance(nodes, list):
+                    return [item for item in nodes if isinstance(item, dict)]
         return [payload]
     return []
 

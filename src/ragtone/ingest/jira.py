@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+
 from ragtone.chunking import jira_chunks
 from ragtone.ingest.base import FetchResult
 from ragtone.ingest.client import ToolCaller
+from ragtone.ingest.page import jira_next, paged_records
 from ragtone.ingest.parse import as_records, as_text, iso_days_ago, later_watermark
 from ragtone.settings import JiraSource, Settings
 
@@ -45,11 +47,16 @@ class JiraConnector:
             return FetchResult()
         stamp = checkpoint if checkpoint and not backfill else iso_days_ago(self.backfill_days)
         jql = scoped_jql(self.source.projects, self.source.jql, stamp)
-        payload = await self.caller.call_tool(
+        issues = await paged_records(
+            self.caller,
             self.source.search_tool,
             {"jql": jql, "cloudId": self.cloud_id, "maxResults": 50},
+            "issues",
+            "results",
+            "values",
+            pause=self.pause,
+            next_args=jira_next,
         )
-        issues = as_records(payload, "issues", "results", "values")
         chunks = []
         newest = checkpoint
         for issue in issues:

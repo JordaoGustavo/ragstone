@@ -25,6 +25,90 @@ def test_clean_watch_item_rejects_jql_injection() -> None:
     assert clean_watch_item("confluence", "docs") == "DOCS"
 
 
+def test_resolve_channel_ref_reads_slack_links() -> None:
+    from ragtone.channel_preview import resolve_channel_ref, slack_plain
+
+    assert (
+        resolve_channel_ref("https://stone.slack.com/archives/C024BE7LT")
+        == "C024BE7LT"
+    )
+    assert (
+        resolve_channel_ref(
+            "https://stone.slack.com/archives/C024BE7LT/p1710000000000100"
+        )
+        == "C024BE7LT"
+    )
+    assert (
+        resolve_channel_ref("https://app.slack.com/client/T12345678/C024BE7LT")
+        == "C024BE7LT"
+    )
+    assert resolve_channel_ref("slack://channel?team=T123&id=C024BE7LT") == "C024BE7LT"
+    assert (
+        resolve_channel_ref("<https://stone.slack.com/archives/C024BE7LT>")
+        == "C024BE7LT"
+    )
+    assert resolve_channel_ref("#eng") == "eng"
+    assert resolve_channel_ref("not a channel!!!") is None
+    assert slack_plain("<@U123> see <https://ex.com|runbook>") == "see runbook"
+
+
+def test_peek_chat_uses_history_and_keeps_real_messages() -> None:
+    from ragtone.channel_preview import peek_chat
+
+    class Caller:
+        async def call_tool(self, name: str, args: dict) -> dict:
+            assert name == "conversations_history"
+            assert args["channel_id"] == "C024BE7LT"
+            assert "oldest" in args
+            return {
+                "channel_name": "sso-warroom",
+                "messages": [
+                    {"text": "<@U1> caiu o sso de novo", "user": "ada", "ts": "2"},
+                    {"text": "", "user": "bot", "ts": "1"},
+                ],
+            }
+
+    settings = Settings(chat={"mcp": "chat"})
+    data = asyncio.run(
+        peek_chat(
+            settings,
+            "https://stone.slack.com/archives/C024BE7LT",
+            caller=Caller(),
+        )
+    )
+    assert data["ok"] is True
+    assert data["id"] == "C024BE7LT"
+    assert data["title"] == "sso-warroom"
+    assert [item["text"] for item in data["messages"]] == ["caiu o sso de novo"]
+    assert data["messages"][0]["author"] == "ada"
+
+
+def test_peek_endpoint_resolves_link_without_mcp(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/admin/peek",
+        json={"name": "chat", "ref": "https://stone.slack.com/archives/C024BE7LT"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == "C024BE7LT"
+    assert data["ok"] is False
+    assert data["messages"] == []
+    assert "MCP" in data["error"]
+
+
+def test_peek_endpoint_rejects_unknown_text(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/admin/peek",
+        json={"name": "chat", "ref": "??? not a channel"},
+    )
+    assert response.status_code == 400
+    assert response.json()["id"] is None
+
+
 def test_watch_store_overrides_yaml(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, chat={"channels": ["yaml"]})
     store = WatchStore(tmp_path / "watches.json")

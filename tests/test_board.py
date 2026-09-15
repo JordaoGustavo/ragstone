@@ -167,12 +167,52 @@ def test_deleting_a_walk_keeps_the_cards() -> None:
     assert board.edges == []
 
 
-def test_board_http_recent_is_quiet_when_index_is_down(tmp_path: Path) -> None:
+def test_board_page_opens_a_finder_for_index_hits(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    page = client.get("/").text
+    assert 'id="open-finder"' in page
+    assert 'id="open-finder-float"' in page
+    assert 'id="finder"' in page
+    assert 'id="finder-hits"' in page
+    assert 'id="q"' in page
+    css = client.get("/static/board.css").text
+    assert ".finder-hit" in css
+    assert "body.finder-open" in css
+    js = client.get("/static/board.js").text
+    assert "openFinder" in js
+    assert "summonFinder" in js
+    assert "hitPreview" in js
+    assert "browseIndex" in js
+    assert 'id="finder-filters"' in page
+    assert ".finder-filters" in css
+    assert 'id="hide-rail"' in page
+    assert 'id="show-rail"' in page
+    assert "body.rail-collapsed" in css
+    assert "ragtone.rail-collapsed" in js
     settings = Settings(data_dir=tmp_path, embedder="hash")
     client = TestClient(create_app(settings))
     data = client.get("/api/recent").json()
     assert data["ok"] is False
     assert data["hits"] == []
+
+
+def test_admin_page_opens_recents_per_connector(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    client = TestClient(create_app(settings))
+    page = client.get("/").text
+    assert 'id="admin-recent"' in page
+    js = client.get("/static/board.js").text
+    assert "toggleAdminRecent" in js
+    assert "/api/recent?source=" in js
+    assert "lookAtChat" in js
+    assert "/api/admin/peek" in js
+    css = client.get("/static/board.css").text
+    assert ".admin-recent-source" in css
+    assert ".watch-peek" in css
+    admin = client.get("/api/admin").json()
+    assert admin["recent"] == []
+    assert [row["name"] for row in admin["connectors"]] == ["jira", "confluence", "chat"]
 
 
 def test_board_http_deletes_a_walk(tmp_path: Path) -> None:
