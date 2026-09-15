@@ -57,6 +57,7 @@ async def paged_records(
     pause: float = 0,
     next_args: NextArgs,
     max_pages: int = MAX_PAGES,
+    record_parser: Callable[[Any], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     extra: dict[str, Any] | None = None
     seen: set[str] = set()
@@ -64,6 +65,10 @@ async def paged_records(
     pages = 0
     for _ in range(max_pages):
         page = await search_page(caller, tool, base, *keys, next_args=next_args, extra=extra)
+        if record_parser is not None:
+            parsed = record_parser(page.payload)
+            if parsed:
+                page.records = parsed
         out.extend(page.records)
         pages += 1
         if not page.next_args:
@@ -146,7 +151,7 @@ def jira_next(
                 return {"nextPageToken": str(end)}
         token = _cursor(payload, "nextPageToken", "next_page_token")
         if token:
-            return {"page_token": token}
+            return {"nextPageToken": token}
         total = payload.get("total")
         start = int(payload.get("startAt") or request.get("start_at") or request.get("startAt") or 0)
         if total is not None:

@@ -82,7 +82,7 @@ def test_jira_backfill_follows_page_token_past_limit_50() -> None:
     assert result.watermark == "2026-02-01T00:00:00.000+0000"
     jql_calls = [args for name, args in caller.calls if name == "jira_search"]
     assert len(jql_calls) == 2
-    assert jql_calls[1].get("page_token") == "p2"
+    assert jql_calls[1].get("nextPageToken") == "p2"
 
 
 def test_jira_backfill_follows_start_at_when_total_outgrows_the_page() -> None:
@@ -214,3 +214,54 @@ def test_chat_backfill_uses_explicit_days_over_channel_window() -> None:
     oldest = caller.calls[0][1]["oldest"]
     age = datetime.now(timezone.utc).timestamp() - float(oldest)
     assert 6 * 86400 < age < 8 * 86400
+
+
+def test_chat_parses_vela_text_history_and_thread_replies() -> None:
+    from ragtone.ingest.chat import ChatConnector
+
+    history = {
+        "messages": """Channel: #eng (C123)
+
+=== Message from Ada Lovelace <ada@example.com> (U1) at 2026-09-15 09:47:29 -03 ===
+Message TS: 1789476449.926349
+deploy concluido
+
+=== Message from Grace Hopper <grace@example.com> (U2) at 2026-09-14 13:45:25 -03 ===
+Message TS: 1789404325.888169
+planning
+Thread: 1 replies (latest: 2026-09-14 13:46:03 -03)
+"""
+    }
+    thread = {
+        "messages": """=== THREAD PARENT MESSAGE ===
+From: Grace Hopper <grace@example.com> (U2)
+Time: 2026-09-14 13:45:25 -03
+Message TS: 1789404325.888169
+planning
+
+=== THREAD REPLIES (1 total) ===
+
+--- Reply 1 of 1 ---
+From: Ada Lovelace <ada@example.com> (U1)
+Time: 2026-09-14 13:46:03 -03
+Message TS: 1789404363.027989
+confirmado
+"""
+    }
+
+    class Caller:
+        async def call_tool(self, name: str, args: dict) -> dict:
+            return thread if name == "replies" else history
+
+    connector = ChatConnector(
+        ChatSource(enabled=True, channels=["C123"], history_tool="history", replies_tool="replies"),
+        Caller(),
+        pause=0,
+        default_days=2,
+    )
+    page = asyncio.run(connector.next_page(None, backfill=True, cursor=None))
+    assert [item.ref for item in page.records[:2]] == ["1789476449.926349", "1789404325.888169"]
+    assert page.records[1].payload["message"]["reply_count"] == 1
+    thread_item = page.records[-1]
+    result = asyncio.run(connector.materialize(thread_item))
+    assert [chunk.text for chunk in result.chunks] == ["planning", "confirmado"]

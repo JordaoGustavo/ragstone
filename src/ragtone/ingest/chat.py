@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from ragtone.checkpoints import CheckpointStore
@@ -10,6 +11,62 @@ from ragtone.ingest.client import ToolCaller
 from ragtone.ingest.page import chat_next, paged_records, search_page
 from ragtone.ingest.parse import as_text, later_watermark, unix_days_ago
 from ragtone.settings import ChatSource, Settings
+
+
+_HISTORY_MESSAGE = re.compile(
+    r"^=== Message from (?P<author>.+?) \([^\n]*\) at (?P<created>.+?) ===\s*\n"
+    r"Message TS: (?P<ts>[0-9.]+)\s*\n(?P<body>.*?)(?=^=== Message from |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+_THREAD_PARENT = re.compile(
+    r"^=== THREAD PARENT MESSAGE ===\s*\n"
+    r"From: (?P<author>.+?) \([^\n]*\)\s*\n"
+    r"Time: (?P<created>.+?)\s*\n"
+    r"Message TS: (?P<ts>[0-9.]+)\s*\n(?P<body>.*?)(?=^=== THREAD REPLIES|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+_THREAD_REPLY = re.compile(
+    r"^--- Reply \d+ of \d+ ---\s*\n"
+    r"From: (?P<author>.+?) \([^\n]*\)\s*\n"
+    r"Time: (?P<created>.+?)\s*\n"
+    r"Message TS: (?P<ts>[0-9.]+)\s*\n(?P<body>.*?)(?=^--- Reply |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _message_from_match(match: re.Match[str], *, thread_ts: str | None = None) -> dict[str, Any]:
+    body = match.group("body").strip()
+    reply_count = re.search(r"^Thread: (\d+) replies", body, re.MULTILINE)
+    if reply_count:
+        body = re.sub(r"^Thread: \d+ replies.*(?:\n|\Z)", "", body, flags=re.MULTILINE).strip()
+    body = re.sub(r"^Reactions:.*(?:\n|\Z)", "", body, flags=re.MULTILINE).strip()
+    message = {
+        "ts": match.group("ts"),
+        "text": body,
+        "user": match.group("author").strip(),
+        "created": match.group("created").strip(),
+    }
+    if reply_count:
+        message["reply_count"] = int(reply_count.group(1))
+    if thread_ts:
+        message["thread_ts"] = thread_ts
+    return message
+
+
+def _text_records(payload: Any, *, thread: bool = False) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("messages"), str):
+        return []
+    text = payload["messages"]
+    if not thread:
+        return [_message_from_match(match) for match in _HISTORY_MESSAGE.finditer(text)]
+    parent = _THREAD_PARENT.search(text)
+    if parent is None:
+        return []
+    thread_ts = parent.group("ts")
+    return [
+        _message_from_match(parent),
+        *[_message_from_match(match, thread_ts=thread_ts) for match in _THREAD_REPLY.finditer(text)],
+    ]
 
 
 class ChatConnector:
@@ -72,6 +129,8 @@ class ChatConnector:
             next_args=chat_next,
             extra=extra,
         )
+        if isinstance(page.payload, dict) and isinstance(page.payload.get("messages"), str):
+            page.records = _text_records(page.payload)
         if self.pause:
             await asyncio.sleep(self.pause)
         key = f"chat:{channel}"
@@ -132,6 +191,7 @@ class ChatConnector:
                 "replies",
                 pause=self.pause,
                 next_args=chat_next,
+                record_parser=lambda payload: _text_records(payload, thread=True),
             )
             chunks = []
             newest = None

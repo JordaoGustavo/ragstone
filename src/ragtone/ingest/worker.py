@@ -45,6 +45,7 @@ class IngestWorker:
         connectors: Sequence[Connector],
         *,
         poll_seconds: int,
+        lease_poll_seconds: int = 5,
         queue: JobQueue | None = None,
         max_attempts: int = MAX_ATTEMPTS,
     ) -> None:
@@ -53,6 +54,7 @@ class IngestWorker:
         self.checkpoints = checkpoints
         self.connectors = list(connectors)
         self.poll_seconds = poll_seconds
+        self.lease_poll_seconds = lease_poll_seconds
         self.queue = queue or JobQueue()
         self.max_attempts = max_attempts
         self._chunks = 0
@@ -112,16 +114,20 @@ class IngestWorker:
                 if not self.queue.active_for(name):
                     self.queue.create_run(name, backfill=True)
         while True:
+            if stop is not None and stop.is_set():
+                return
             if self.queue.try_lease("sync"):
                 self._maybe_enqueue_polls()
                 progressed = await self.drain_once()
-                self.queue.renew_lease("sync")
-                if not progressed:
-                    await asyncio.sleep(1)
+                if progressed:
+                    self.queue.renew_lease("sync")
+                    continue
+                # Do not retain or renew a lease while idle. This lets board-triggered
+                # syncs proceed and avoids a read/write cycle against Elasticsearch.
+                self.queue.release_lease("sync")
             else:
-                await asyncio.sleep(1)
-            if stop is not None and stop.is_set():
-                return
+                log.debug("sync lease is held by another worker")
+            await asyncio.sleep(self.lease_poll_seconds)
 
     def _maybe_enqueue_polls(self) -> None:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

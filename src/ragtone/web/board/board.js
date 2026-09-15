@@ -1112,7 +1112,7 @@ function renderQueue(job) {
       adminProgressLabel.textContent = `${percent}%${jobCounts(job)}`;
     } else if (running) {
       adminProgressLabel.textContent = job.discovered
-        ? `${job.indexed} indexados · ${job.discovered} descobertos`
+        ? `${job.indexed} processados · ${job.discovered} descobertos`
         : "paginando…";
     } else {
       adminProgressLabel.textContent = "";
