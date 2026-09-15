@@ -315,3 +315,42 @@ def test_load_settings_reads_yaml(tmp_path: Path) -> None:
     assert settings.mcp_port == 9001
     assert settings.jira.enabled is True
     assert settings.jira.mcp == "atlassian"
+
+
+def test_load_settings_merges_local_yaml(tmp_path: Path) -> None:
+    (tmp_path / "ragtone.yaml").write_text(
+        "mcp_port: 9001\n"
+        "jira:\n"
+        "  enabled: false\n"
+        "  mcp: atlassian\n"
+        "  projects: []\n"
+        "foundation_mcps:\n"
+        "  - name: atlassian\n"
+        "    transport: http\n"
+        "    url: http://placeholder\n"
+    )
+    (tmp_path / "ragtone.local.yaml").write_text(
+        "mcp_port: 9002\n"
+        "jira:\n"
+        "  enabled: true\n"
+        "  projects: [ABC]\n"
+        "foundation_mcps:\n"
+        "  - name: atlassian\n"
+        "    transport: http\n"
+        "    url: http://127.0.0.1:9/real-gateway\n"
+    )
+    settings = load_settings(tmp_path / "ragtone.yaml")
+    assert settings.mcp_port == 9002
+    assert settings.jira.enabled is True
+    assert settings.jira.mcp == "atlassian"
+    assert settings.jira.projects == ["ABC"]
+    assert settings.foundation_mcps[0].url == "http://127.0.0.1:9/real-gateway"
+
+
+def test_load_settings_skips_local_when_config_is_already_local(tmp_path: Path) -> None:
+    (tmp_path / "ragtone.yaml").write_text("mcp_port: 9001\n")
+    local = tmp_path / "ragtone.local.yaml"
+    local.write_text("mcp_port: 9002\n")
+    (tmp_path / "ragtone.local.local.yaml").write_text("mcp_port: 1\n")
+    settings = load_settings(local)
+    assert settings.mcp_port == 9002

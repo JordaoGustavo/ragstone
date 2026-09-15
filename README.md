@@ -27,7 +27,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Edit `ragtone.yaml`: Foundation MCP URL or stdio command, enable `jira` / `confluence` / `chat`, set JQL/CQL/channels.
+Edit `ragtone.yaml` for shared defaults. Put machine- or company-specific values (MCP URLs, project keys, channels) in `ragtone.local.yaml`. That file is gitignored and merged on top of `ragtone.yaml` automatically, like `.env`.
 
 ```bash
 python -m ragtone ping

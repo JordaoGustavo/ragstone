@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -95,16 +96,40 @@ class Settings(BaseSettings):
         raise KeyError(f"No Foundation MCP named {name!r} in ragtone.yaml")
 
 
-def load_settings(path: Path | None = None) -> Settings:
-    import os
+def _read_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    loaded = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} must contain a mapping")
+    return loaded
 
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _local_override_path(config_path: Path) -> Path | None:
+    name = config_path.name
+    if name.endswith(".local.yaml") or name.endswith(".local.yml"):
+        return None
+    suffix = ".yml" if name.endswith(".yml") else ".yaml"
+    return config_path.with_name(f"{config_path.stem}.local{suffix}")
+
+
+def load_settings(path: Path | None = None) -> Settings:
     config_path = path or Path(os.environ.get("RAGTONE_CONFIG", "ragtone.yaml"))
-    data: dict = {}
-    if config_path.exists():
-        loaded = yaml.safe_load(config_path.read_text()) or {}
-        if not isinstance(loaded, dict):
-            raise ValueError(f"{config_path} must contain a mapping")
-        data = loaded
+    data = _read_yaml_mapping(config_path)
+    override_path = _local_override_path(config_path)
+    if override_path is not None:
+        data = _deep_merge(data, _read_yaml_mapping(override_path))
     settings = Settings.model_validate(data)
     es_url = os.environ.get("ELASTICSEARCH_URL")
     if es_url:

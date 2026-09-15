@@ -15,8 +15,17 @@ embed_port: 8770
 embed_url: ""
 data_dir: data
 # Real gateway URLs, project keys, page ids, channel ids etc are company-specific —
-# keep them out of this tracked file. Put them in ragtone.local.yaml (gitignored)
-# and run with: ragtone --config ragtone.local.yaml <command>
+# keep them out of this tracked file. Put them in ragtone.local.yaml (gitignored).
+# That file is merged on top of this one automatically, like .env.
+#
+# Example ragtone.local.yaml:
+#   jira:
+#     enabled: true
+#     projects: [ABC]
+#   foundation_mcps:
+#     - name: atlassian
+#       transport: http
+#       url: http://127.0.0.1:replace-with-real-gateway
 
 # Fill these with the Foundation MCP servers you already use in Claude/OpenCode.
 foundation_mcps:
