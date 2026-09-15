@@ -43,7 +43,18 @@ class InMemoryIndex:
             if not _matches(doc, filters):
                 continue
             dense = _cosine(vector, self._vectors[doc_id])
-            lexical = lexical_score(query, f"{doc.get('title', '')} {doc.get('text', '')}")
+            haystack = " ".join(
+                str(doc.get(field) or "")
+                for field in (
+                    "title",
+                    "text",
+                    "native_id",
+                    "parent_id",
+                    "thread_id",
+                    "channel_or_space",
+                )
+            )
+            lexical = lexical_score(query, haystack)
             score = 0.6 * dense + 0.4 * lexical
             scored.append(hit_from_source(doc_id, score, doc))
         scored.sort(key=lambda hit: hit.score, reverse=True)

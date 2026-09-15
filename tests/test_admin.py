@@ -180,7 +180,11 @@ def test_poll_named_runs_only_that_connector(tmp_path: Path) -> None:
 
 
 def test_board_http_admin_when_index_is_down(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path, embedder="hash")
+    settings = Settings(
+        data_dir=tmp_path,
+        embedder="hash",
+        elasticsearch_url="http://127.0.0.1:1",
+    )
     client = TestClient(create_app(settings))
     data = client.get("/api/admin").json()
     assert data["index"]["ok"] is False

@@ -842,7 +842,9 @@ async function runSearch() {
   openFinder();
   searchStatus.textContent = "buscando…";
   finderHits.innerHTML = "";
-  const data = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then((r) => r.json());
+  const data = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
+    .then((r) => r.json())
+    .catch(() => ({ ok: false, hits: [] }));
   if (gen !== searchGen) return;
   if (!data.ok) {
     searchStatus.textContent = "índice fora — Soltar nota põe no canvas";

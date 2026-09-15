@@ -126,6 +126,7 @@ class BoardContext:
             if not es_index.ping():
                 self._retrieval_failed = True
                 return None
+            es_index.ensure_index()
             self._retrieval = RetrievalService(
                 es_index,
                 build_embedder(
@@ -295,7 +296,11 @@ async def search(request: Request) -> JSONResponse:
         )
     if not query:
         return JSONResponse({"ok": True, "hits": []})
-    hits = retrieval.search(query, source=source, k=12)
+    try:
+        hits = retrieval.search(query, source=source, k=12)
+    except Exception:
+        log.exception("search failed")
+        return JSONResponse({"ok": False, "reason": "search failed", "hits": []})
     return JSONResponse({"ok": True, "hits": hits})
 
 

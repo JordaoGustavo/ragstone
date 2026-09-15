@@ -7,7 +7,7 @@ from pathlib import Path
 from ragtone.checkpoints import CheckpointStore
 from ragtone.chunking import chat_chunk, confluence_chunks, jira_chunks, split_markdown_sections
 from ragtone.embeddings import HashEmbedder
-from ragtone.index import hybrid_search_body
+from ragtone.index import hybrid_search_body, identifier_values
 from ragtone.ingest.base import FetchResult, Page, WorkRecord
 from ragtone.ingest.parse import as_records, as_text
 from ragtone.ingest.worker import IngestWorker
@@ -63,21 +63,36 @@ def test_hash_embedder_is_normalized_and_stable() -> None:
     assert math.isclose(math.sqrt(sum(v * v for v in first)), 1.0, rel_tol=1e-6)
 
 
-def test_hybrid_body_uses_rrf_and_filters() -> None:
+def test_hybrid_body_uses_knn_query_and_filters() -> None:
     body = hybrid_search_body(
-        query="login timeout",
+        query="login timeout ABC-9",
         vector=[0.1, 0.2],
         filters=Filters(source="jira", channel="eng", since="2026-01-01"),
         k=8,
     )
-    rrf = body["retriever"]["rrf"]
-    kinds = {next(iter(item)) for item in rrf["retrievers"]}
-    assert kinds == {"standard", "knn"}
-    knn = next(item["knn"] for item in rrf["retrievers"] if "knn" in item)
+    assert "retriever" not in body
+    assert "rank" not in body
+    query = body["query"]["bool"]
+    assert query["filter"][0] == {"term": {"source": "jira"}}
+    assert query["filter"][2] == {"range": {"updated_at": {"gte": "2026-01-01"}}}
+    knn = next(item["knn"] for item in query["should"] if "knn" in item)
     assert knn["field"] == "embedding"
-    assert knn["filter"]["bool"]["filter"][0] == {"term": {"source": "jira"}}
-    lexical = next(item["standard"]["query"] for item in rrf["retrievers"] if "standard" in item)
-    assert lexical["bool"]["filter"][2] == {"range": {"updated_at": {"gte": "2026-01-01"}}}
+    assert knn["k"] == 8
+    match = next(item["multi_match"] for item in query["should"] if "multi_match" in item)
+    assert "title^2" in match["fields"]
+    assert any(
+        item.get("term", {}).get("native_id", {}).get("value") == "ABC-9"
+        for item in query["should"]
+    )
+
+
+def test_identifier_values_extract_issue_keys() -> None:
+    assert identifier_values("ABC-12") == ["ABC-12"]
+    assert identifier_values("timeout no ABC-12 e NET-1") == [
+        "timeout no ABC-12 e NET-1",
+        "ABC-12",
+        "NET-1",
+    ]
 
 
 class _ScriptedConnector:
@@ -231,6 +246,17 @@ def test_retrieval_search_prefers_the_matching_issue() -> None:
     service = RetrievalService(store, embedder)
     hits = service.search("SSO login timeout", source="jira")
     assert hits[0]["native_id"] == "ABC-1"
+
+
+def test_retrieval_search_finds_issue_by_key() -> None:
+    embedder = HashEmbedder(32)
+    store = InMemoryIndex()
+    relevant = jira_chunks(key="ABC-12", summary="SSO login timeout", description="Users stuck")
+    noise = jira_chunks(key="NET-1", summary="Printer jam", description="Third floor")
+    store.upsert(relevant + noise, embedder.embed([c.text for c in relevant + noise]))
+    service = RetrievalService(store, embedder)
+    hits = service.search("ABC-12")
+    assert hits[0]["native_id"] == "ABC-12"
 
 
 def test_retrieval_expands_thread_and_page() -> None:

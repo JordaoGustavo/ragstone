@@ -200,10 +200,10 @@ def test_board_page_opens_a_finder_for_index_hits(tmp_path: Path) -> None:
     assert "node.unread" in js
     assert "/api/board/seen" in js
     assert "refreshUnreads" in js
-    settings = Settings(data_dir=tmp_path, embedder="hash")
-    client = TestClient(create_app(settings))
+    empty = RetrievalService(InMemoryIndex(), HashEmbedder(8))
+    client = TestClient(create_app(settings, retrieval=empty))
     data = client.get("/api/recent").json()
-    assert data["ok"] is False
+    assert data["ok"] is True
     assert data["hits"] == []
 
 
@@ -330,6 +330,32 @@ def _app_with_index(tmp_path: Path, chunks):
     retrieval = RetrievalService(store, embedder)
     settings = Settings(data_dir=tmp_path, embedder="hash")
     return TestClient(create_app(settings, retrieval=retrieval)), store, embedder
+
+
+def test_board_http_search_returns_hits(tmp_path: Path) -> None:
+    issue = jira_chunks(key="ABC-12", summary="SSO timeout", description="gateway")
+    client, _, _ = _app_with_index(tmp_path, issue)
+    blank = client.get("/api/search")
+    assert blank.status_code == 200
+    assert blank.json() == {"ok": True, "hits": []}
+    found = client.get("/api/search", params={"q": "ABC-12"})
+    assert found.status_code == 200
+    body = found.json()
+    assert body["ok"] is True
+    assert body["hits"][0]["native_id"] == "ABC-12"
+
+
+def test_board_http_search_does_not_500_when_index_rejects(tmp_path: Path) -> None:
+    class _BoomStore:
+        def search(self, *args, **kwargs):
+            raise RuntimeError("current license is non-compliant for [Reciprocal Rank Fusion (RRF)]")
+
+    settings = Settings(data_dir=tmp_path, embedder="hash")
+    retrieval = RetrievalService(_BoomStore(), HashEmbedder(8))
+    client = TestClient(create_app(settings, retrieval=retrieval))
+    response = client.get("/api/search", params={"q": "SSO"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "reason": "search failed", "hits": []}
 
 
 def test_board_http_badges_a_new_slack_reply(tmp_path: Path) -> None:

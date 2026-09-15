@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Sequence
 
 from elasticsearch import Elasticsearch, helpers
@@ -7,6 +8,9 @@ from elasticsearch import Elasticsearch, helpers
 from ragtone.models import Chunk, Filters, Hit
 
 EMBEDDING_FIELD = "embedding"
+SEARCH_TIMEOUT = 10
+_ISSUE_KEY = re.compile(r"\b([A-Za-z][A-Za-z0-9_]+-\d+)\b")
+_ID_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{3,}$")
 
 
 def filter_clauses(filters: Filters) -> list[dict[str, Any]]:
@@ -20,6 +24,49 @@ def filter_clauses(filters: Filters) -> list[dict[str, Any]]:
     return clauses
 
 
+def identifier_values(query: str) -> list[str]:
+    stripped = query.strip()
+    values: list[str] = []
+    if stripped:
+        values.append(stripped)
+    for key in _ISSUE_KEY.findall(stripped):
+        if key not in values:
+            values.append(key)
+    return values
+
+
+def identifier_clauses(query: str) -> list[dict[str, Any]]:
+    clauses: list[dict[str, Any]] = []
+    fields = (("native_id", 8.0), ("parent_id", 6.0), ("thread_id", 4.0))
+    for value in identifier_values(query):
+        for field, boost in fields:
+            clauses.append(
+                {
+                    "term": {
+                        field: {
+                            "value": value,
+                            "boost": boost,
+                            "case_insensitive": True,
+                        }
+                    }
+                }
+            )
+    token = query.strip()
+    if _ID_TOKEN.fullmatch(token):
+        clauses.append(
+            {
+                "prefix": {
+                    "native_id": {
+                        "value": token,
+                        "boost": 3.0,
+                        "case_insensitive": True,
+                    }
+                }
+            }
+        )
+    return clauses
+
+
 def hybrid_search_body(
     *,
     query: str,
@@ -28,41 +75,36 @@ def hybrid_search_body(
     k: int,
 ) -> dict[str, Any]:
     clauses = filter_clauses(filters)
-    lexical: dict[str, Any] = {
+    should: list[dict[str, Any]] = [
+        {
+            "multi_match": {
+                "query": query,
+                "fields": ["title^2", "text"],
+                "type": "best_fields",
+                "fuzziness": "AUTO",
+                "prefix_length": 1,
+                "lenient": True,
+            }
+        },
+        *identifier_clauses(query),
+        {
+            "knn": {
+                "field": EMBEDDING_FIELD,
+                "query_vector": list(vector),
+                "k": k,
+                "num_candidates": max(k * 8, 50),
+            }
+        },
+    ]
+    body_query: dict[str, Any] = {
         "bool": {
-            "must": [
-                {
-                    "multi_match": {
-                        "query": query,
-                        "fields": ["title^2", "text"],
-                    }
-                }
-            ]
+            "should": should,
+            "minimum_should_match": 1,
         }
     }
     if clauses:
-        lexical["bool"]["filter"] = clauses
-    knn: dict[str, Any] = {
-        "field": EMBEDDING_FIELD,
-        "query_vector": list(vector),
-        "k": k,
-        "num_candidates": max(k * 8, 50),
-    }
-    if clauses:
-        knn["filter"] = {"bool": {"filter": clauses}}
-    return {
-        "size": k,
-        "_source": {"excludes": [EMBEDDING_FIELD]},
-        "retriever": {
-            "rrf": {
-                "retrievers": [
-                    {"standard": {"query": lexical}},
-                    {"knn": knn},
-                ],
-                "rank_window_size": max(k * 5, 20),
-            }
-        },
-    }
+        body_query["bool"]["filter"] = clauses
+    return {"size": k, "query": body_query}
 
 
 def mappings(dims: int) -> dict[str, Any]:
@@ -153,10 +195,10 @@ class SearchIndex:
         k: int = 8,
     ) -> list[Hit]:
         body = hybrid_search_body(query=query, vector=vector, filters=filters, k=k)
-        response = self.es.search(
+        response = self.es.options(request_timeout=SEARCH_TIMEOUT).search(
             index=self.index_name,
             size=body["size"],
-            retriever=body["retriever"],
+            query=body["query"],
             source_excludes=[EMBEDDING_FIELD],
         )
         return [
