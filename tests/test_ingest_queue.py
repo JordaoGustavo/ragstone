@@ -11,7 +11,7 @@ from ragtone.chunking import jira_chunks
 from ragtone.embeddings import HashEmbedder
 from ragtone.ingest.base import FetchResult, Page, WorkRecord
 from ragtone.ingest.jobs import IngestItem, contiguous_watermarks, progress_percent
-from ragtone.ingest.queue import JobQueue
+from ragtone.ingest.queue import JobQueue, MemoryBackend
 from ragtone.ingest.worker import IngestWorker
 from ragtone.memory_index import InMemoryIndex
 from ragtone.settings import FoundationMcp, Settings
@@ -107,6 +107,23 @@ def test_lease_is_exclusive() -> None:
     assert queue.try_lease("board") is True
 
 
+def test_reacquiring_own_lease_does_not_write_again() -> None:
+    class RecordingBackend(MemoryBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.lease_writes = 0
+
+        def save_lease(self, holder: str, until: str) -> None:
+            self.lease_writes += 1
+            super().save_lease(holder, until)
+
+    backend = RecordingBackend()
+    queue = JobQueue(backend)
+    assert queue.try_lease("sync") is True
+    assert queue.try_lease("sync") is True
+    assert backend.lease_writes == 1
+
+
 class _Scripted:
     name = "jira"
 
@@ -145,6 +162,21 @@ def test_worker_drains_queue_pages(tmp_path: Path) -> None:
     assert count == 1
     assert checkpoints.get("jira") == "2026-03-01"
     assert store.by_issue("ABC-1")
+
+
+def test_queue_stops_a_run_when_a_page_repeats_only_known_records() -> None:
+    queue = JobQueue()
+    run = queue.create_run("jira", backfill=True)
+    first = Page(
+        records=[WorkRecord(ref="ABC-1", payload={})],
+        cursor={"nextPageToken": "again"},
+        done=False,
+    )
+    queue.accept_page(run.id, first)
+    repeated = queue.accept_page(run.id, first)
+    assert repeated.discovered == 1
+    assert repeated.producer_done is True
+    assert repeated.error == "pagination repeated an already discovered page"
 
 
 def test_board_http_enqueues_sync_on_injected_queue(tmp_path: Path) -> None:

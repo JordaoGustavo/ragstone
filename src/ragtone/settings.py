@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     board_host: str = "127.0.0.1"
     board_port: int = 8766
     poll_seconds: int = 1200
+    lease_poll_seconds: int = 5
     mcp_pause_seconds: float = 0.5
     backfill_days: int = 365
     embedder: Literal["fastembed", "hash", "http"] = "fastembed"

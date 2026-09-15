@@ -95,6 +95,7 @@ async def with_worker(
             checkpoints,
             connectors,
             poll_seconds=settings.poll_seconds,
+            lease_poll_seconds=settings.lease_poll_seconds,
             queue=jobs,
         )
         return await fn(worker)

@@ -371,9 +371,13 @@ class JobQueue:
     def accept_page(self, run_id: str, page: Page) -> IngestRun:
         run = self._require_run(run_id)
         stamp = now_iso()
+        accepted = 0
         for record in page.records:
+            item_id = f"{run.id}:{record.ref}"
+            if self._b.load_item(item_id) is not None:
+                continue
             item = IngestItem(
-                id=f"{run.id}:{record.ref}",
+                id=item_id,
                 run_id=run.id,
                 connector=run.connector,
                 ref=record.ref,
@@ -388,11 +392,17 @@ class JobQueue:
             self._b.save_item(item)
             run.seq_next += 1
             run.discovered += 1
+            accepted += 1
         run.pages += 1
         if page.total is not None:
             run.total = page.total
-        run.page_cursor = page.cursor
-        run.producer_done = page.done
+        # A connector returning only references already emitted is repeating a page.
+        # Stop the run instead of continually reindexing the same documents.
+        repeated_page = bool(page.records) and accepted == 0 and not page.done
+        run.page_cursor = None if repeated_page else page.cursor
+        run.producer_done = page.done or repeated_page
+        if repeated_page:
+            run.error = "pagination repeated an already discovered page"
         run.status = "running"
         run.updated_at = stamp
         self._b.save_run(run)
@@ -538,7 +548,9 @@ class JobQueue:
         now = now_iso()
         until = later_iso(LEASE_TTL, start=now)
         current = self._b.load_lease()
-        if current is None or current[1] <= now or current[0] == holder:
+        if current is not None and current[0] == holder:
+            return True
+        if current is None or current[1] <= now:
             self._b.save_lease(holder, until)
             return True
         return False
